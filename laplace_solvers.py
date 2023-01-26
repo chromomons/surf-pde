@@ -72,25 +72,34 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
         rho_u = 1.0 / h
         alpha = args['alpha']
         dt = args['dt']
+        stab_type = args['stab_type']
 
-        a = BilinearForm(V, symmetric=True)
-        a += (2.0 / (alpha * dt) * u * v) * ds
-        a += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
-        # normal gradient volume stabilization of the velocity
-        a += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+        m = BilinearForm(V, symmetric=True)  # mass
+        d = BilinearForm(V, symmetric=True)  # diffusion
+        a = BilinearForm(V, symmetric=True)  # mass-diffusion
 
-        a2 = BilinearForm(V, symmetric=True)
-        a2 += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
-        # normal gradient volume stabilization of the velocity
-        a2 += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
-
-        m = BilinearForm(V, symmetric=True)
+        # mass part
         m += u * v * ds
+        a += 2.0 / (alpha * dt) * u * v * ds
+
+        if stab_type in ['new', 'total']:
+            # stabilizing mass part
+            m += h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+            a += 2.0 / (alpha * dt) * h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+
+        if stab_type in ['old', 'total']:
+            # stabilizing diffusion part
+            d += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+            a += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+
+        # diffusion part
+        a += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
+        d += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
 
         f = LinearForm(V)
         f += rhsf * v * ds
 
-        return a, a2, m, f
+        return m, d, a, f
 
 
 def assemble_forms(list_of_forms):
@@ -117,7 +126,7 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     phi = CoefficientFunction(exact["phi"]).Compile()
 
     # LEVELSET ADAPTATION
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
     deformation = lsetmeshadap.CalcDeformation(phi)
     lset_approx = lsetmeshadap.lset_p1
     ci = CutInfo(mesh, lset_approx)
@@ -176,7 +185,7 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     return V.ndof, l2u, h1u
 
 
-def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, **exact):
+def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', **exact):
     if order < 3:
         precond_name = "bddc"
         cg_iter = 10
@@ -187,7 +196,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, **exact):
     phi = CoefficientFunction(exact["phi"]).Compile()
 
     # LEVELSET ADAPTATION
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
     deformation = lsetmeshadap.CalcDeformation(phi)
     lset_approx = lsetmeshadap.lset_p1
 
@@ -218,13 +227,13 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, **exact):
     Pmat = Id(3) - OuterProduct(n, n)
 
     ### bilinear forms:
-    bilinear_form_args = {'alpha': alpha, 'dt': dt}
-    a, a2, m, f = define_forms(eq_type='diffusion', V=V, n=n, Pmat=Pmat, rhsf=rhsf, ds=ds, dX=dX, **bilinear_form_args)
+    bilinear_form_args = {'alpha': alpha, 'dt': dt, 'stab_type': stab_type}
+    m, d, a, f = define_forms(eq_type='diffusion', V=V, n=n, Pmat=Pmat, rhsf=rhsf, ds=ds, dX=dX, **bilinear_form_args)
 
     start = time.perf_counter()
     with TaskManager():
         prea = Preconditioner(a, precond_name)
-        assemble_forms([a, a2, m, f])
+        assemble_forms([m, d, a, f])
 
     print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
@@ -269,7 +278,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, **exact):
             f.Assemble()
 
         # TR
-        rhs.data = fold + f.vec - 2 * a2.mat * gfu.vec
+        rhs.data = fold + f.vec - 2 * d.mat * gfu.vec
 
         with TaskManager():
             solvers.CG(mat=a.mat, pre=prea.mat, rhs=rhs, sol=diff, initialize=True, maxsteps=cg_iter, tol=1e-12,
@@ -282,7 +291,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, **exact):
         with TaskManager():
             f.Assemble()
 
-        rhs.data = f.vec + (1.0-alpha)/(alpha*dt)* m.mat * diff - a2.mat * gfu.vec
+        rhs.data = f.vec + (1.0-alpha)/(alpha*dt)* m.mat * diff - d.mat * gfu.vec
 
         with TaskManager():
             solvers.CG(mat=a.mat, pre=prea.mat, rhs=rhs, sol=diff, initialize=True, maxsteps=cg_iter, tol=1e-12,

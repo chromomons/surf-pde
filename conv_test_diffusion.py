@@ -6,13 +6,16 @@ import numpy as np
 import scipy.integrate as sci
 import sys
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 SetNumThreads(16)
 
 mode = str(sys.argv[1])
 order = int(sys.argv[2])
-
+stab_type = str(sys.argv[3])
+unif_ref = 2
+max_nref = 5
 mass_cf = 0.0
 
 # EXACT QUANTITIES
@@ -25,8 +28,6 @@ if mode == 'circ':
         "f": pi*(2*y*z*(2*pi*x*cos(pi*x) + 3*sin(pi*x))*cos(pi*y*z) + (2*x*cos(pi*x) + pi*(y**4 + y**2*(x**2 - 2*z**2 + 1) + z**2*(x**2 + z**2 + 1))*sin(pi*x))*sin(pi*y*z))/(x**2 + y**2 + z**2) + mass_cf*sin(pi*x)*sin(pi*y*z)
     }
     bbox_sz = 1.0
-    unif_ref = 2
-    max_nref = 4
 else:
     print("Invalid mode.")
     exit(1)
@@ -38,25 +39,26 @@ mesh = None
 l2us = []
 h1us = []
 
+sns.set()
+
 for nref in range(max_nref+1):
     h = 2*bbox_sz*2**(-unif_ref-nref)
-    dt = h**1.5
+    dt = h**((order+1)/2)
 
     if mesh:
         refine_at_levelset(mesh=mesh, levelset=exact['phi'], nref=1)
     else:
         mesh = background_mesh(unif_ref=unif_ref, bbox_sz=bbox_sz)
 
-    ndof, ts, l2uss, h1uss = diffusion(mesh=mesh, dt=dt, order=order, out=False, **exact)
+    ndof, ts, l2uss, h1uss = diffusion(mesh=mesh, dt=dt, order=order, out=False, stab_type=stab_type, **exact)
 
-    plt.plot(l2uss)
-    plt.title('L^2 vels')
-    plt.show()
-
-    plt.plot(h1uss)
-    plt.title('H^1 vels')
-    plt.show()
-
+    # plt.plot(l2uss)
+    # plt.title('L^2 vels')
+    # plt.show()
+    #
+    # plt.plot(h1uss)
+    # plt.title('H^1 vels')
+    # plt.show()
 
     l2u = max(l2uss)
     h1u = np.sqrt(sci.simps(y=np.array(h1uss)**2, x=ts, dx=dt, even='avg'))
