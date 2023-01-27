@@ -185,7 +185,7 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     return V.ndof, l2u, h1u
 
 
-def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', **exact):
+def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs=False, **exact):
     if order < 3:
         precond_name = "bddc"
         cg_iter = 10
@@ -250,9 +250,22 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', **exact
     # IC
     t.Set(0.0)
 
-    mesh.SetDeformation(deformation)
-    gfu.Set(uSol)
-    mesh.UnsetDeformation()
+    if bad_rhs:
+        rhsf_el = CoefficientFunction(exact["f"] + exact["u"]).Compile()
+        bilinear_form_args = {'mass_cf': 1.0}
+        a_el, f_el = define_forms(eq_type='poisson', V=V, n=n, Pmat=Pmat, rhsf=rhsf_el, ds=ds, dX=dX, **bilinear_form_args)
+        start = time.perf_counter()
+        with TaskManager():
+            prea_el = Preconditioner(a_el, precond_name)
+            assemble_forms([a_el, f_el])
+            solvers.CG(mat=a_el.mat, pre=prea_el.mat, rhs=f_el.vec, sol=gfu.vec, maxsteps=cg_iter, initialize=True, tol=1e-12,
+                       printrates=False)
+        sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
+        print(f"{bcolors.OKGREEN}IC computed      ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    else:
+        mesh.SetDeformation(deformation)
+        gfu.Set(uSol)
+        mesh.UnsetDeformation()
 
     if out:
         vtk = VTKOutput(mesh,
