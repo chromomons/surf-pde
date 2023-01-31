@@ -210,11 +210,11 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         m = BilinearForm(V, symmetric=True)
         m += InnerProduct(Pmat * u, Pmat * v) * ds
 
-        # velocity mass-convection-diffusion matrix
+        # velocity mass-convection-total_stab_tests_diffusion matrix
         a = BilinearForm(V, symmetric=False)
         # mass part
         a += dtparam / dt * InnerProduct(Pmat * u, Pmat * v) * ds
-        # diffusion part
+        # total_stab_tests_diffusion part
         a += nu * (
             InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat, Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
         # convection part
@@ -224,11 +224,11 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         # normal gradient in the bulk stabilization
         a += (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
 
-        # pressure mass-convection-diffusion matrix
+        # pressure mass-convection-total_stab_tests_diffusion matrix
         ap = BilinearForm(Q, symmetric=False)
         # mass part
         ap += dtparam / dt * p * q * ds
-        # diffusion
+        # total_stab_tests_diffusion
         ap += nu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # convection
         ap += InnerProduct(Pmat * grad(p), Pmat * gfu_approx) * q * ds
@@ -236,9 +236,9 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         # SHOULD IT BE rho_p OR rho_u?
         ap += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
 
-        # pressure diffusion matrix
+        # pressure total_stab_tests_diffusion matrix
         pd = BilinearForm(Q, symmetric=True)
-        # diffusion
+        # total_stab_tests_diffusion
         pd += InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
         pd += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
@@ -282,7 +282,7 @@ def append_errors(t_curr, l2u, h1u, l2p, h1p, **errs):
 def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     phi = CoefficientFunction(exact["phi"]).Compile()
     ### Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
     deformation = lsetmeshadap.CalcDeformation(phi)
     lset_approx = lsetmeshadap.lset_p1
     mesh.SetDeformation(deformation)
@@ -379,7 +379,7 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
 def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     phi = CoefficientFunction(exact["phi"]).Compile()
     # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
     deformation = lsetmeshadap.CalcDeformation(phi)
     lset_approx = lsetmeshadap.lset_p1
     mesh.SetDeformation(deformation)
@@ -558,11 +558,11 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
+def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **exact):
     nu = exact['nu']
     phi = CoefficientFunction(exact["phi"]).Compile()
     # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
     deformation = lsetmeshadap.CalcDeformation(phi)
     lset_approx = lsetmeshadap.lset_p1
     mesh.SetDeformation(deformation)
@@ -639,7 +639,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
 
     # LINEAR SOLVER
 
-    maxsteps_outer_gmres = 200
+    maxsteps_outer_gmres = 40
 
     invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-6)
     invpd = CGSolver(pd.mat, prepd.mat, maxsteps=5, precision=1e-6)
@@ -679,7 +679,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
         with TaskManager():
             assemble_forms([f, g, a, ap])
 
-            inva = GMRESSolver(a.mat, prea.mat, maxsteps=2000, precision=1e-6)
+            inva = GMRESSolver(a.mat, prea.mat, maxsteps=5000, precision=1e-6)
             invms = invsq @ ap.mat @ invpd
 
             A = BlockMatrix([[a.mat, b.mat.T],
@@ -695,15 +695,17 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
 
             gfu_prev.Set(gfu)
 
-            solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=True, maxsteps=maxsteps_outer_gmres, tol=1e-12,
-                          restart=20)
+            solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=maxsteps_outer_gmres, tol=1e-9)
             U += diff
 
             renormalize(Q, mesh, ds, gfp, domMeas)
 
         t_curr += dt
-        # print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
-        print(f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)")
+
+        if printrates:
+            print(f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)")
+        else:
+            print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
             l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)

@@ -10,7 +10,7 @@ import json
 
 SetNumThreads(16)
 
-f = open('input_diffusion.json')
+f = open('input/input_diffusion.json')
 params = json.load(f)
 
 mode = params['mode']

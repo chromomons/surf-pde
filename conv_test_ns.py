@@ -4,20 +4,28 @@ from meshing import *
 from ngsolve import SetNumThreads
 import pandas as pd
 import scipy.integrate as sci
-import matplotlib.pyplot as plt
-import seaborn as sns
+import sys
+import json
 
 SetNumThreads(16)
 
-order = 2
+input_file_name = str(sys.argv[1])
+
+f = open(f"./input/{input_file_name}")
+params = json.load(f)
+
+mode = params['mode']
+nu = params['nu']
+order = params['order']
+unif_ref = params['unif_ref']
+max_nref = params['max_nref']
+fname = params['fname']
+printrates = params['printrates']
 
 # EXACT QUANTITIES
 
-mode = 'reu_circ'
-
-nu = 1.0
-
 alpha = 0.0
+bbox_sz = 1.0
 
 if mode == 'reu_circ':
     exact = {
@@ -49,7 +57,6 @@ if mode == 'reu_circ':
         "conv2": (3*x**6*(y + 10*z) + x**4*(-6*y**3 - 30*y**2*z + 5*y*z**2 + 45*z**3) + x**2*z*(-60*y**4 + 2*y**3*z + 15*y**2*z**2 + 2*y*z**3 + 15*z**4) - 15*y*z**3*(2*y**3 + 2*y*z**2 + 15*z**3))/(x**2 + y**2 + z**2)**2,
         "conv3": z*(-2*x**6 - x**4*(13*y**2 + 105*y*z + 2*z**2) - x**2*(2*y**4 + 75*y**3*z + 2*y**2*z**2 + 15*y*z**3 - 225*z**4) + 15*y**2*z*(2*y**3 + 2*y*z**2 + 15*z**3))/(x**2 + y**2 + z**2)**2
     }
-    bbox_sz = 1.0
 elif mode == 'ols':
     exact = {
         "name": mode,
@@ -77,7 +84,6 @@ elif mode == 'ols':
         "conv2": y*(x**2*(x - y)*(x + y) + 2*x*z*(x**2*(x - 1) + y**2*(x + 1)) + z**5 + z**4*(x*(3*x + 2) + 1) + z**3*(-2*x*(x + 1) + y**2) + z**2*(2*x**2*(x + 2) - y**2*(3*x + 1)))/(x**2 + y**2 + z**2)**2,
         "conv3": (x**4*z*(3*z - 2) - 2*x**3*y**2 + x**2*z*(y**2*(2*z - 3) + z**3*(3*z - 2)) + x*y**2*(-2*y**2 + z**2*(2 - 5*z)) - y**2*z*(y**2*(z - 1) + z**2*(z + 1)))/(x**2 + y**2 + z**2)**2
     }
-    bbox_sz = 1.0
 else:
     r = 1. / 3
     R = 2. / 3
@@ -351,10 +357,6 @@ else:
         "conv2": (30*R**10*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2) - 3*R**9*sqrt(x**2 + y**2)*(x**4*y*(x**2 - 2*y**2) + 100*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2) + z**3*(10*x**4 + 15*x**2*y**2 - 10*y**4)) + R**8*(27*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2) + x**2*y*z**2*(2*x**4 + 13*x**2*y**2 + 2*y**4) + 1350*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**2 - 225*y*z**6*(x**2 + y**2) + z**3*(15*x**2 + 15*y**2)*(25*x**4 + 13*x**2*y**2 - 18*y**4)) - 2*R**7*sqrt(x**2 + y**2)*(54*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2) + 2*x**2*y*z**2*(7*x**4 + 20*x**2*y**2 + 4*y**4) + 1800*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**2 - 900*y*z**6*(x**2 + y**2) + z**5*(60*x**4 + 45*x**2*y**2 - 60*y**4) + z**3*(30*x**2 + 30*y**2)*(32*x**4 - x**2*y**2 - 18*y**4)) + R**6*(252*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2)**2 + x**2*y*z**4*(8*x**4 + 43*x**2*y**2 + 8*y**4) + 28*x**2*y*z**2*(x**2 + y**2)**2*(5*x**2 + 2*y**2) + 6300*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**3 - 675*y*z**8*(x**2 + y**2) - 6300*y*z**6*(x**2 + y**2)**2 + z**5*(30*x**2 + 30*y**2)*(32*x**4 + 13*x**2*y**2 - 28*y**4) + 420*z**3*(x**2 + y**2)**2*(13*x**4 - 5*x**2*y**2 - 6*y**4)) - 2*R**5*sqrt(x**2 + y**2)*(189*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2)**2 + 3*x**2*y*z**4*(11*x**4 + 37*x**2*y**2 + 8*y**4) + 14*x**2*y*z**2*(x**2 + y**2)*(13*x**4 + 8*x**2*y**2 + 4*y**4) + 3780*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**3 - 2025*y*z**8*(x**2 + y**2) - 6300*y*z**6*(x**2 + y**2)**2 + z**7*(90*x**4 - 90*y**4) + z**5*(45*x**2 + 45*y**2)*(36*x**4 + 5*x**2*y**2 - 28*y**4) + 105*z**3*(x**2 + y**2)**2*(46*x**4 - 29*x**2*y**2 - 18*y**4)) + R**4*(378*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2)**3 + 15*x**2*y*z**4*(x**2 + y**2)*(14*x**4 + 31*x**2*y**2 + 8*y**4) + 70*x**2*y*z**2*(x**2 + y**2)**2*(8*x**4 + x**2*y**2 + 2*y**4) + 6300*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**4 - 675*y*z**10*(x**2 + y**2) - 10125*y*z**8*(x**2 + y**2)**2 - 3*y*z**6*(5246*x**6 + 15733*x**4*y**2 + 15746*x**2*y**4 + 5250*y**6) + z**7*(30*x**2 + 30*y**2)*(31*x**4 - 2*x**2*y**2 - 30*y**4) + z**5*(x**2 + y**2)**2*(5*x**2 + 4*y**2)*(1200*x**2 - 1050*y**2) + 210*z**3*(x**2 + y**2)**3*(53*x**4 - 43*x**2*y**2 - 18*y**4)) - 2*R**3*sqrt(x**2 + y**2)*(126*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2)**3 + 10*x**2*y*z**4*(x**2 + y**2)**2*(17*x**2 + 8*y**2) + 14*x**2*y*z**2*(x**2 + y**2)**2*(19*x**4 - 4*x**2*y**2 + 4*y**4) + 1800*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**4 - 1350*y*z**10*(x**2 + y**2) - 6750*y*z**8*(x**2 + y**2)**2 - 6*y*z**6*(1045*x**6 + 3135*x**4*y**2 + 3146*x**2*y**4 + 1050*y**6) + z**9*(60*x**4 - 45*x**2*y**2 - 60*y**4) + z**7*(60*x**2 + 60*y**2)*(16*x**4 - 2*x**2*y**2 - 15*y**4) + 75*z**5*(x**2 + y**2)**2*(44*x**4 - 11*x**2*y**2 - 28*y**4) + z**3*(x**2 + y**2)**3*(4*x**2 + y**2)*(1050*x**2 - 1260*y**2)) + R**2*(108*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2)**4 + 15*x**2*y*z**4*(x**2 + y**2)**2*(20*x**4 + 19*x**2*y**2 + 8*y**4) + 28*x**2*y*z**2*(x**2 + y**2)**3*(11*x**4 - 5*x**2*y**2 + 2*y**4) + 1350*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**5 - 225*y*z**12*(x**2 + y**2) - 4050*y*z**10*(x**2 + y**2)**2 - y*z**8*(10117*x**6 + 30350*x**4*y**2 + 30367*x**2*y**4 + 10125*y**6) - 18*y*z**6*(x**2 + y**2)*(344*x**6 + 1037*x**4*y**2 + 1046*x**2*y**4 + 350*y**6) + z**9*(30*x**2 + 30*y**2)*(11*x**4 - 7*x**2*y**2 - 12*y**4) + 180*z**7*(x**2 + y**2)**2*(11*x**4 - 2*x**2*y**2 - 10*y**4) + 90*z**5*(x**2 + y**2)**3*(48*x**4 - 19*x**2*y**2 - 28*y**4) + 60*z**3*(x**2 + y**2)**4*(67*x**4 - 71*x**2*y**2 - 18*y**4)) - R*sqrt(x**2 + y**2)*(x**2 + y**2 + z**2)**2*(27*x**4*y*(x**2 - 2*y**2)*(x**2 + y**2)**2 + x**2*y*z**4*(19*x**4 + 44*x**2*y**2 + 16*y**4) + 2*x**2*y*z**2*(x**2 + y**2)*(23*x**4 + 22*x**2*y**2 + 8*y**4) + 300*x**2*z*(x**2 - 2*y**2)*(x**2 + y**2)**3 - 450*y*z**8*(x**2 + y**2) - 1800*y*z**6*(x**2 + y**2)**2 + z**7*(2*x**2 + y**2)*(15*x**2 - 30*y**2) + z**5*(x**2 + y**2)**2*(240*x**2 - 300*y**2) + 15*z**3*(x**2 + y**2)**2*(34*x**4 - 5*x**2*y**2 - 18*y**4)) + (x**2 + y**2)**2*(x**2 + y**2 + z**2)**3*(3*x**6*(y + 10*z) + x**4*(-6*y**3 - 30*y**2*z + 5*y*z**2 + 45*z**3) + x**2*z*(-60*y**4 + 2*y**3*z + 15*y**2*z**2 + 2*y*z**3 + 15*z**4) - 15*y*z**3*(2*y**3 + 2*y*z**2 + 15*z**3)))/((x**2 + y**2)**2*(R**2 - 2*R*sqrt(x**2 + y**2) + x**2 + y**2 + z**2)**5),
         "conv3": -z*(15*R**6*y*z*sqrt(x**2 + y**2)*(7*x**2 - 2*y**2) + R**5*(-x**2*(2*x**4 + 13*x**2*y**2 + 2*y**4) + 90*y*z*(-7*x**2 + 2*y**2)*(x**2 + y**2) + z**4*(225*x**2 + 225*y**2)) + 5*R**4*sqrt(x**2 + y**2)*(2*x**6 + x**4*y*(13*y + 315*z) + x**2*(2*y**4 + 225*y**3*z + 24*y*z**3 - 225*z**4) - 3*y**2*z*(30*y**3 + 4*y*z**2 + 75*z**3)) + R**3*(-x**2*z**2*(x**2 + 4*y**2)*(4*x**2 + y**2) - 10*x**2*(x**2 + y**2)*(2*x**4 + 13*x**2*y**2 + 2*y**4) + 240*y*z**3*(-2*x**2 + y**2)*(x**2 + y**2) + 300*y*z*(-7*x**2 + 2*y**2)*(x**2 + y**2)**2 + z**6*(225*x**2 + 225*y**2) + 2250*z**4*(x**2 + y**2)**2) + R**2*sqrt(x**2 + y**2)*(3*x**2*z**2*(x**2 + 4*y**2)*(4*x**2 + y**2) + 10*x**2*(x**2 + y**2)*(2*x**4 + 13*x**2*y**2 + 2*y**4) + 15*y*z**5*(x**2 - 2*y**2) - 360*y*z**3*(-2*x**2 + y**2)*(x**2 + y**2) + 225*y*z*(x**2 + y**2)**2*(7*x**2 - 2*y**2) - z**6*(675*x**2 + 675*y**2) - 2250*z**4*(x**2 + y**2)**2) + R*(x**2 + y**2)*(-3*x**2*z**2*(x**2 + 4*y**2)*(4*x**2 + y**2) - 5*x**2*(x**2 + y**2)*(2*x**4 + 13*x**2*y**2 + 2*y**4) + 30*y*z**5*(-x**2 + 2*y**2) + 240*y*z**3*(-2*x**2 + y**2)*(x**2 + y**2) + 90*y*z*(-7*x**2 + 2*y**2)*(x**2 + y**2)**2 + z**6*(675*x**2 + 675*y**2) + z**4*(x**2 + y**2)*(1123*x**2 + 1125*y**2)) + (x**2 + y**2)**(3/2)*(x**2 + y**2 + z**2)*(2*x**6 + x**4*(13*y**2 + 105*y*z + 2*z**2) + x**2*(2*y**4 + 75*y**3*z + 2*y**2*z**2 + 15*y*z**3 - 225*z**4) - 15*y**2*z*(2*y**3 + 2*y*z**2 + 15*z**3)))/((x**2 + y**2)**(3/2)*(R**2 - 2*R*sqrt(x**2 + y**2) + x**2 + y**2 + z**2)**3)
     }
-    bbox_nz = 1.0
-
-unif_ref = 2
-max_nref = 3
 
 mesh = None
 
@@ -365,37 +367,30 @@ h1us = []
 l2ps = []
 h1ps = []
 
-sns.set()
-
 for nref in range(max_nref+1):
     h = 2*bbox_sz*2**(-unif_ref-nref)
-    dt = h**1.5
+    dt = h**((order+1.0)/2)
 
     if mesh:
         refine_at_levelset(mesh=mesh, levelset=exact['phi'], nref=1)
     else:
         mesh = background_mesh(unif_ref=unif_ref, bbox_sz=bbox_sz)
 
-    # if nref == max_nref:
-    ndof, ts, l2uss, h1uss, l2pss, h1pss = navier_stokes(mesh=mesh, dt=dt, order=order, out=False, **exact)
+    ndof, ts, l2uss, h1uss, l2pss, h1pss = navier_stokes(mesh=mesh, dt=dt, order=order, out=False,
+                                                         printrates=printrates, **exact)
+
+    if nref == 0:
+        fe = open(f"./txt_out/ns/errs-{fname}.txt", "w")
+        fd = open(f"./txt_out/ns/data-{fname}.txt", "w")
+    else:
+        fe = open(f"./txt_out/ns/errs-{fname}.txt", "a")
+        fd = open(f"./txt_out/ns/data-{fname}.txt", "a")
 
     print(f"h = {h}, ndof = {ndof}")
 
-    plt.plot(l2uss)
-    plt.title('L^2 vels')
-    plt.show()
-
-    plt.plot(h1uss)
-    plt.title('H^1 vels')
-    plt.show()
-
-    plt.plot(l2pss)
-    plt.title('L^2 pres')
-    plt.show()
-
-    plt.plot(h1pss)
-    plt.title('H^1 pres')
-    plt.show()
+    fe.write(f"h = {h}, ndof = {ndof}\n")
+    fd.write(f"h = {h}, ndof = {ndof}\n")
+    fd.write(f"{str(ts)}\n{str(l2uss)}\n{str(h1uss)}\n{str(l2pss)}\n"f"{str(h1pss)}\n\n")
 
     l2u = max(l2uss)
     l2p = np.sqrt(sci.simps(y=np.array(l2pss) ** 2, x=ts, dx=dt, even='avg'))
@@ -403,15 +398,21 @@ for nref in range(max_nref+1):
     h1p = np.sqrt(sci.simps(y=np.array(h1pss) ** 2, x=ts, dx=dt, even='avg'))
 
     df.loc[nref] = [h, ndof, l2u, h1u, l2p, h1p]
-    df.to_csv(f"./csvs/{mode}_p{order}-ns-bdf1-bdf2.csv")
+    df.to_csv(f"./csvs/{mode}_p{order}-ns-bdf2-{fname}.csv")
 
     if len(l2us) > 0:
-        print(
-            f"{ndof:.2E} & {np.log2(l2us[-1] / l2u):.2f} & {l2u:.2E} & {np.log2(h1us[-1] / h1u):.2f} & {h1u:.2E} & {np.log2(l2ps[-1] / l2p):.2f} & {l2p:.2E} & {np.log2(h1ps[-1] / h1p):.2f} & {h1p:.2E}")
+        msg = f"{ndof:.2E} & {np.log2(l2us[-1] / l2u):.2f} & {l2u:.2E} & {np.log2(h1us[-1] / h1u):.2f} & {h1u:.2E} & {np.log2(l2ps[-1] / l2p):.2f} & {l2p:.2E} & {np.log2(h1ps[-1] / h1p):.2f} & {h1p:.2E}"
+        print(msg)
+        fe.write(f"{msg}\n")
     else:
-        print(f"{ndof:.2E} &      & {l2u:.2E} &      & {h1u:.2E} &      & {l2p:.2E} &      & {h1p:.2E}")
+        msg = f"{ndof:.2E} &      & {l2u:.2E} &      & {h1u:.2E} &      & {l2p:.2E} &      & {h1p:.2E}"
+        print(msg)
+        fe.write(f"{msg}\n")
 
     l2us.append(l2u)
     h1us.append(h1u)
     l2ps.append(l2p)
     h1ps.append(h1p)
+
+    fd.close()
+    fe.close()
