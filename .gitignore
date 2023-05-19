@@ -13,3 +13,4 @@ parab_reu_circ_p2_new_stab_dt=h^(3/
 total_stab_tests_diffusion/
 txt_out/
 vtk_out/
+__pycache__/
