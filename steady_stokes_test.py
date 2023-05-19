@@ -1,6 +1,7 @@
+import sys
 from stokes_solvers import *
 import numpy as np
-from ..meshing import *
+from meshing import *
 from ngsolve import SetNumThreads
 import pandas as pd
 

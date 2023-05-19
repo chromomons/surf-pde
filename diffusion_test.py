@@ -85,7 +85,7 @@ for nref in range(max_nref+1):
     print(f"h = {h}, ndof = {ndof}")
 
     df.loc[nref] = [h, dt, ndof, l2u, h1u]
-    df.to_csv(f"./csvs/diffusion/{mode}-p{order}-{stab_type}-{fname}.csv")
+    # df.to_csv(f"./csvs/diffusion/{mode}-p{order}-{stab_type}-{fname}.csv")
 
     if len(l2us) > 0:
         print(f"{ndof:.2E} & {np.log2(l2us[-1]/l2u):.2f} & {l2u:.2E} & {np.log2(h1us[-1]/h1u):.2f} & {h1u:.2E}")
