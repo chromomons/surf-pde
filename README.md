@@ -55,12 +55,14 @@ My machine:
 Assuming `ngsxfem=2.0.2105` and `ngsolve=6.2.2105` are installed correcly, it should suffice to just clone this repository and run it.
 
 ### Files
-The files can be grouped into three parts: 
+The `.py` files can be grouped into three parts: 
 - _common utility files_: like `meshing.py` are used by all other files
 - _solvers_: routines that implement TraceFEM solvers. They are grouped by PDE type and geometry type, i.e. diffusion on an evolving surface or Navier-Stokes on a fixed surface.
 - _testers_: there is a tester file for each solver. It produces EOC, demos, etc.
 
 `input/` folder contains JSON input files for the testers.
+
+`wolfram_mathamatica_notebooks/` folder contains Mathematica scripts that compute symbolic right-hand sides, and other exact quantities. 
 
 More concretely,
 - `meshing.py`: tools for mesh generation and refinement, intended to be called from testers, and not solvers.
