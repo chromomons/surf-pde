@@ -7,97 +7,11 @@ from ngsolve import TaskManager
 import time
 from math import pi
 import numpy as np
+from utils import bcolors, assemble_forms, get_dom_measure, renormalize, mass_append, errors_scal, \
+    errors_vec, helper_grid_functions
 
 
-# FORMATTING TOOLS
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-
-def printbf(s):
-    print(f"{bcolors.BOLD}{s}{bcolors.ENDC}")
-    return
-
-
-# DIFF OPERATORS
-
-
-def coef_fun_grad(u):
-    return CoefficientFunction(tuple([u.Diff(d) for d in [x,y,z]]))
-
-
-def vec_grad(v):
-    return CoefficientFunction(tuple( [v[i].Diff(d) for i in [0,1,2] for d in [x,y,z]] ), dims=(3,3))
-
-
-# ERRORS
-def errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol):
-    return sqrt(Integrate(InnerProduct(gfu - uSol, Pmat * (gfu - uSol)) * ds, mesh)),\
-           sqrt(Integrate(InnerProduct((grad(gfu) - vec_grad(uSol)) * Pmat, Pmat * (grad(gfu) - vec_grad(uSol)) * Pmat) * ds, mesh)),\
-           sqrt(Integrate((pSol - gfp) * (pSol - gfp) * ds, mesh)),\
-           sqrt(Integrate(InnerProduct(grad(gfp) - coef_fun_grad(pSol), Pmat*(grad(gfp) - coef_fun_grad(pSol))) * ds, mesh))
-
-
-def errors_ex(mesh, dX, n, gfu, gfp, ds, Pmat, Hmat, h, dt, rho_u, rho_p):
-    errs = {
-                'ngu': sqrt(Integrate(rho_u * InnerProduct(grad(gfu) * n, grad(gfu) * n) * dX, mesh)),
-                'ngp': sqrt(Integrate(rho_p * InnerProduct(grad(gfp) * n, grad(gfp) * n) * dX, mesh)),
-                'divg': sqrt(Integrate(InnerProduct(Trace(Pmat * grad(gfu) * Pmat) - (gfu*n)*Trace(Hmat), Trace(Pmat * grad(gfu) * Pmat) - (gfu*n)*Trace(Hmat)) * ds, mesh)),
-                'tang': sqrt(Integrate((gfu*n) * (gfu*n) * ds, mesh))
-            }
-    return errs
-
-
-def get_dom_measure(Q, mesh, ds):
-    one = GridFunction(Q)
-    one.Set(CoefficientFunction(1.0))
-    domMeas = Integrate(one * ds, mesh)
-    return domMeas
-
-
-def renormalize(Q, mesh, ds, gfp, domMeas=None):
-    gfpInt = Integrate(gfp * ds, mesh)
-    if not domMeas:
-        domMeas = get_dom_measure(Q, mesh, ds)
-    gfpMeanVal = GridFunction(Q)
-    gfpMeanVal.Set(CoefficientFunction(float(gfpInt/domMeas)))
-    pNum = GridFunction(Q)
-    pNum.Set(gfp - gfpMeanVal)
-    gfp.Set(pNum)
-    return
-
-
-# HELPERS
-def helper_grid_functions(mesh, order, levelset, vel_space):
-    # aux pressure space of order=order+1
-    Phkp1 = H1(mesh, order=order + 1, dirichlet=[])
-    # aux pressure space of order=order
-    Phk = H1(mesh, order=order, dirichlet=[])
-    # aux velocity space of order=order-1 for the shape operator
-    VPhkm1 = VectorH1(mesh, order=order - 1, dirichlet=[])
-
-    phi_kp1 = GridFunction(Phkp1)
-    n_k = GridFunction(vel_space)
-    phi_k = GridFunction(Phk)
-    n_km1 = GridFunction(VPhkm1)
-
-    phi_kp1.Set(levelset)
-    n_k.Set(Normalize(grad(phi_kp1)))
-    phi_k.Set(levelset)
-    n_km1.Set(Normalize(grad(phi_k)))
-    Hmat = grad(n_km1)
-
-    return phi_kp1, n_k, phi_k, n_km1, Hmat
-
-
+# HELPER
 def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
     u, v = V.TnT()
     p, q = Q.TnT()
@@ -266,21 +180,7 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         return m, a, ap, pd, b, c, sq, f, g
 
 
-def assemble_forms(list_of_forms):
-    for form in list_of_forms:
-        form.Assemble()
-
-
-def append_errors(t_curr, l2u, h1u, l2p, h1p, **errs):
-    errs['ts'].append(t_curr)
-    errs['l2us'].append(l2u)
-    errs['h1us'].append(h1u)
-    errs['l2ps'].append(l2p)
-    errs['h1ps'].append(h1p)
-
 # SOLVERS
-
-
 def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     phi = CoefficientFunction(exact["phi"]).Compile()
     ### Levelset adaptation
@@ -303,7 +203,7 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     gfp = GridFunction(Q)
 
     # helper grid functions
-    phi_kp1, n_k, phi_k, n_km1, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
+    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
 
     # declare integration domains
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
@@ -363,7 +263,8 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     ### ERRORS
 
     with TaskManager():
-        l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
+        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
+        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
 
     mesh.UnsetDeformation()
 
@@ -406,7 +307,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     gfp = GridFunction(Q)
 
     # helper grid functions
-    phi_kp1, n_k, phi_k, n_km1, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
+    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
 
     # declare the integration domains
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
@@ -457,7 +358,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     M = BlockMatrix([[m.mat, None],
                      [None, zeroq.mat]])
 
-    maxsteps_minres = 40
+    maxsteps_minres = 100
 
     inva = CGSolver(a.mat, prea.mat, maxsteps=5, precision=1e-4)
     invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-4)
@@ -496,11 +397,13 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     rhs2 = g.vec.CreateVector()
     rhs = BlockVector([rhs1, rhs2])
 
+    keys = ['ts', 'l2us', 'h1us', 'l2ps', 'h1ps']
     out_errs = {'ts': [], 'l2us': [], 'h1us': [], 'l2ps': [], 'h1ps': []}
 
     with TaskManager():
-        l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
-    append_errors(t_curr, l2u, h1u, l2p, h1p, **out_errs)
+        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
+        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+    mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
     start = time.perf_counter()
 
@@ -542,8 +445,9 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
         print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
-            l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
-        append_errors(t_curr, l2u, h1u, l2p, h1p, **out_errs)
+            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
+            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+        mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
         if out:
             with TaskManager():
@@ -559,7 +463,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, outer_gmres_iter=20, nref=0, tol=1e-12, n_gmres = 50, is_reltol=True, **exact):
+def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, outer_gmres_iter=20, nref=0, tol=1e-12, n_gmres=50, is_reltol=True, **exact):
     nu = exact['nu']
     phi = CoefficientFunction(exact["phi"]).Compile()
     # Levelset adaptation
@@ -588,7 +492,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
     gfp = GridFunction(Q)
 
     # helper grid functions
-    phi_kp1, n_k, phi_k, n_km1, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
+    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
 
     # declare the integration domains
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
@@ -664,11 +568,13 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
     diffp = 0.0 * gfp.vec.CreateVector()
     diff = BlockVector([diffu, diffp])
 
+    keys = ['ts', 'l2us', 'h1us', 'l2ps', 'h1ps']
     out_errs = {'ts': [], 'l2us': [], 'h1us': [], 'l2ps': [], 'h1ps': []}
 
     with TaskManager():
-        l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
-    append_errors(t_curr, l2u, h1u, l2p, h1p, **out_errs)
+        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
+        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+    mass_append(keys=keys, vals=[l2u, h1u, l2p, h1p], **out_errs)
 
     start = time.perf_counter()
 
@@ -711,8 +617,9 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
             print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
-            l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
-        append_errors(t_curr, l2u, h1u, l2p, h1p, **out_errs)
+            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
+            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+        mass_append(keys=keys, vals=[l2u, h1u, l2p, h1p], **out_errs)
 
         if out:
             with TaskManager():

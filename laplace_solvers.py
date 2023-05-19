@@ -8,46 +8,43 @@ import time
 import sys
 import numpy as np
 from math import pi
-
-
-# FORMATTING TOOLS
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-
-def printbf(s):
-    print(f"{bcolors.BOLD}{s}{bcolors.ENDC}")
-    return
-
-
-# DIFF OPERATORS
-
-
-def coef_fun_grad(u):
-    return CoefficientFunction(tuple([u.Diff(d) for d in [x,y,z]]))
-
-
-def vec_grad(v):
-    return CoefficientFunction(tuple( [v[i].Diff(d) for i in [0,1,2] for d in [x,y,z]] ), dims=(3,3))
-
-
-# ERRORS
-def errors(mesh, ds, Pmat, gfu, uSol):
-    return sqrt(Integrate(InnerProduct(gfu - uSol, gfu - uSol) * ds, mesh=mesh)),\
-           sqrt(Integrate(InnerProduct(Pmat * (grad(gfu) - coef_fun_grad(uSol)), Pmat * (grad(gfu) - coef_fun_grad(uSol))) * ds, mesh=mesh))
+from utils import bcolors, assemble_forms, mass_append, errors_scal
 
 
 # HELPERS
 
 def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
+    """
+    Routine that defines bilinear and linear forms for the poisson and the diffusion equation.
+    Args:
+        eq_type: str
+            Type of PDE: "poisson" or "diffusion" (default)
+        V: Compressed H1 space
+            TraceFEM space for u
+        n: Vector-valued GridFunction
+            Discrete normal vector
+        Pmat: Tensor-valued GridFunction
+            Discrete projection matrix
+        rhsf: CoefficientFunction
+            Right-hand side of the PDE
+        ds: xfem.dCul
+            Element of area on Gamma
+        dX: ngsolve.utils.dx
+            Element of bulk volume
+        **args:
+            Parameters that are problem-dependent, like
+            args['alpha']: float
+                Coefficient in front of the mass term
+            args['nu']: float
+                Coefficient of kinematic viscocity
+            args['dt']: float
+                Time step size
+            args['gfu_approx']: Vector-valued GridFunction
+                Extrapolation of u at t=t_{n+1} for linearization of the convection term in Navier-Stokes
+
+    Returns:
+        A tuple of bilinear and linear problems relevant to the problem
+    """
     u, v = V.TnT()
     h = specialcf.mesh_size
 
@@ -102,19 +99,39 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
         return m, d, a, f
 
 
-def assemble_forms(list_of_forms):
-    for form in list_of_forms:
-        form.Assemble()
-
-
-def append_errors(t_curr, l2u, h1u, **errs):
-    errs['ts'].append(t_curr)
-    errs['l2us'].append(l2u)
-    errs['h1us'].append(h1u)
-
-
 # SOLVERS
 def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
+    """
+    Solves Poisson equation (with an added mass term to allow non-mean-zero right-hand-sides) on a provided mesh.
+    The initial data and RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
+    Args:
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma and is (ideally) refined around it.
+        mass_cf: float
+            Parameter in front of mass term. Set to 1.0 by default.
+        order: int
+            Polynomial order for FEM, default 1.
+        out: bool
+            Flag that indicates if VTK output is to be created.
+        **exact: Dict
+            A dictionary that contains information about the exact solution.
+            exact['name']: str
+                Name of the test case, refer to poisson_test.py and diffusion_test.py for more details.
+            exact['phi']: CoefficientFunction
+                The levelset function.
+            exact['u']: CoefficientFunction
+                Solution of the PDE.
+            exact['f']: CoefficientFunction
+                Right-hand-side of the PDE.
+
+    Returns:
+        V.ndof: int
+            Number of degrees of freedom of the problem.
+        l2u: float
+            L^2-error of the solution over Gamma
+        h1u: float
+            H^1-error of the solution over Gamma
+    """
     if order < 3:
         precond_name = "bddc"
         cg_iter = 5
@@ -171,7 +188,7 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     # ERRORS
 
     with TaskManager():
-        l2u, h1u = errors(mesh, ds, Pmat, gfu, uSol)
+        l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, uSol)
 
     if out:
         with TaskManager():
@@ -185,6 +202,53 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
 
 
 def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs=False, **exact):
+    """
+
+    Args:
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma and is (ideally) refined around it.
+        dt: float
+            Time step size.
+        tfinal: float
+            Final time in the simulation.
+        order: int
+            Polynomial order for FEM, default 1.
+        out: bool
+            Flag that indicates if VTK output is to be created.
+        stab_type: str
+            Type of stabilization. The standard one is what we call here 'old', i.e. normal gradient in the bulk.
+            We also offer two other (more experimental) types of stabilizations:
+                - 'new': where we stabilize the mass term instead of the diffusion term with a scaling factor h.
+                - 'total': where we apply both 'old' and 'new' stabilizations.
+            The motivation behind the other two stabilizations is that they have better conditioning properties
+            when dt -> 0, h fixed. But again, consistency analysis of these two schemes has not been conducted yet
+            (as of May 2023).
+        bad_rhs: bool
+            Flag that indicates if we want to run the solver with non-square integrable right-hand-side. This results
+            in a slightly different initialization of the initial condition due to technical problems.
+        **exact: Dict
+            A dictionary that contains information about the exact solution. Note that the CoefficientFunctions
+            should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
+            using OOP.
+            exact['name']: str
+                Name of the test case, refer to poisson_test.py and diffusion_test.py for more details.
+            exact['phi']: CoefficientFunction
+                The levelset function.
+            exact['u']: CoefficientFunction
+                Solution of the PDE.
+            exact['f']: CoefficientFunction
+                Right-hand-side of the PDE.
+
+    Returns:
+        V.ndof: int
+            Number of degrees of freedom of the problem.
+        out_errs['ts']: List[float]
+            Discrete times t_n at which problem was solved.
+        out_errs['l2us']: List[float]
+            List of L^2-error for each t_n.
+        out_errs['h1us']: List[float]
+            List of H^1-error for each t_n.
+    """
     if order < 3:
         precond_name = "bddc"
         cg_iter = 10
@@ -277,10 +341,11 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
         vtk.Do(time=0.0)
 
     out_errs = {'ts': [], 'l2us': [], 'h1us': []}
+    keys = ['ts', 'l2us', 'h1us']
 
     with TaskManager():
-        l2u, h1u = errors(mesh, ds, Pmat, gfu, uSol)
-    append_errors(t_curr, l2u, h1u, **out_errs)
+        l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, uSol)
+    mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
     start = time.perf_counter()
 
@@ -320,8 +385,8 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
         print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
-            l2u, h1u = errors(mesh, ds, Pmat, gfu, uSol)
-        append_errors(t_curr, l2u, h1u, **out_errs)
+            l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, uSol)
+        mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
         if out:
             with TaskManager():

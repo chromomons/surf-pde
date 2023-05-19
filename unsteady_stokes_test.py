@@ -92,19 +92,9 @@ l2us = []
 h1us = []
 l2ps = []
 h1ps = []
-# l2l2ps = []
-# max_pintl2s = []
-# l2_pintl2s = []
-# max_ngus = []
-# l2_ngus = []
-# max_ngps = []
-# l2_ngps = []
-# max_ngips = []
-# l2_ngips = []
-# max_divgs = []
-# l2_divgs = []
-# max_tangs = []
-# l2_tangs = []
+
+plt_out = False
+csv_out = False
 
 for nref in range(max_nref+1):
     h = 2*bbox_sz*2**(-unif_ref-nref)
@@ -117,21 +107,22 @@ for nref in range(max_nref+1):
 
     ndof, ts, l2uss, h1uss, l2pss, h1pss = stokes(mesh=mesh, dt=dt, order=order, out=False, **exact)
 
-    plt.plot(l2uss)
-    plt.title('L^2 vels')
-    plt.show()
+    if plt_out:
+        plt.plot(l2uss)
+        plt.title('L^2 vels')
+        plt.show()
 
-    plt.plot(h1uss)
-    plt.title('H^1 vels')
-    plt.show()
+        plt.plot(h1uss)
+        plt.title('H^1 vels')
+        plt.show()
 
-    plt.plot(l2pss)
-    plt.title('L^2 pres')
-    plt.show()
+        plt.plot(l2pss)
+        plt.title('L^2 pres')
+        plt.show()
 
-    plt.plot(h1pss)
-    plt.title('H^1 pres')
-    plt.show()
+        plt.plot(h1pss)
+        plt.title('H^1 pres')
+        plt.show()
 
     l2u = max(l2uss)
     l2p = np.sqrt(sci.simps(y=np.array(l2pss)**2, x=ts, dx=dt, even='avg'))
@@ -141,7 +132,7 @@ for nref in range(max_nref+1):
     print(f"h = {h}, ndof = {ndof}")
 
     df.loc[nref] = [h, dt, ndof, l2u, h1u, l2p, h1p]
-    df.to_csv(f"./csvs/parab_{mode}_p{order}_old_stab.csv")
+    # df.to_csv(f"./csvs/parab_{mode}_p{order}_old_stab.csv")
 
     if len(l2us) > 0:
         print(f"{ndof:.2E} & {np.log2(l2us[-1]/l2u):.2f} & {l2u:.2E} & {np.log2(h1us[-1]/h1u):.2f} & {h1u:.2E} & {np.log2(l2ps[-1]/l2p):.2f} & {l2p:.2E} & {np.log2(h1ps[-1]/h1p):.2f} & {h1p:.2E}")
@@ -153,52 +144,3 @@ for nref in range(max_nref+1):
     h1us.append(h1u)
     l2ps.append(l2p)
     h1ps.append(h1p)
-
-    # ndof, ts, l2uss, h1uss, l2pss, h1pss, pintl2ss, nguss, ngpss, ngipss, divgss, tangss = stokes(mesh=mesh, dt=dt, order=order, out=False, scheme='tr', new_stab=False, **exact)
-    # l2u = max(l2uss)
-    # l2p = max(l2pss)
-    # l2l2p = np.sqrt(sci.simps(y=np.array(l2pss) ** 2, x=ts, dx=dt, even='avg'))
-    # h1u = np.sqrt(sci.simps(y=np.array(h1uss)**2, x=ts, dx=dt, even='avg'))
-    # h1p = np.sqrt(sci.simps(y=np.array(h1pss)**2, x=ts, dx=dt, even='avg'))
-    #
-    # max_pintl2 = max(pintl2ss)
-    # l2_pintl2 = np.sqrt(sci.simps(y=np.array(pintl2ss)**2, x=ts, dx=dt, even='avg'))
-    # max_ngu = max(nguss)
-    # l2_ngu = np.sqrt(sci.simps(y=np.array(nguss)**2, x=ts, dx=dt, even='avg'))
-    # max_ngp = max(ngpss)
-    # l2_ngp = np.sqrt(sci.simps(y=np.array(ngpss) ** 2, x=ts, dx=dt, even='avg'))
-    # max_ngip = max(ngipss)
-    # l2_ngip = np.sqrt(sci.simps(y=np.array(ngipss) ** 2, x=ts, dx=dt, even='avg'))
-    # max_divg = max(divgss)
-    # l2_divg = np.sqrt(sci.simps(y=np.array(divgss) ** 2, x=ts, dx=dt, even='avg'))
-    # max_tang = max(tangss)
-    # l2_tang = np.sqrt(sci.simps(y=np.array(tangss) ** 2, x=ts, dx=dt, even='avg'))
-    #
-    # print(f"h = {h}, ndof = {ndof}")
-    #
-    # df.loc[nref] = [h, dt, ndof, l2u, h1u, l2p, h1p, l2l2p, max_pintl2, l2_pintl2, max_ngu, l2_ngu, max_ngp, l2_ngp, max_ngip, l2_ngip, max_divg, l2_divg, max_tang, l2_tang]
-    # df.to_csv(f"parab_{mode}_p{order}_new_stab.csv")
-    #
-    # if len(l2us) > 0:
-    #     print(f"{ndof:.2E} & {np.log2(l2us[-1]/l2u):.2f} & {l2u:.2E} & {np.log2(h1us[-1]/h1u):.2f} & {h1u:.2E} & {np.log2(l2ps[-1]/l2p):.2f} & {l2p:.2E} & {np.log2(h1ps[-1]/h1p):.2f} & {h1p:.2E} & {np.log2(l2l2ps[-1]/l2l2p):.2f} & {l2l2p:.2E} & {np.log2(max_pintl2s[-1]/max_pintl2):.2f} & {max_pintl2:.2E} & {np.log2(l2_pintl2s[-1]/l2_pintl2):.2f} & {l2_pintl2:.2E} & {np.log2(max_ngus[-1]/max_ngu):.2f} & {max_ngu:.2E} & {np.log2(l2_ngus[-1]/l2_ngu):.2f} & {l2_ngu:.2E} & {np.log2(max_ngps[-1]/max_ngp):.2f} & {max_ngp:.2E} & {np.log2(l2_ngps[-1]/l2_ngp):.2f} & {l2_ngp:.2E} & {np.log2(max_ngips[-1]/max_ngip):.2f} & {max_ngip:.2E} & {np.log2(l2_ngips[-1]/l2_ngip):.2f} & {l2_ngip:.2E} & {np.log2(max_divgs[-1]/max_divg):.2f} & {max_divg:.2E} & {np.log2(l2_divgs[-1]/l2_divg):.2f} & {l2_divg:.2E} & {np.log2(max_tangs[-1]/max_tang):.2f} & {max_tang:.2E} & {np.log2(l2_tangs[-1]/l2_tang):.2f} & {l2_tang:.2E}")
-    # else:
-    #     print(f"  ndof   &      &   lil2u  &      &   l2h1u  &      &   lil2p  &      &   l2h1p  &      &   l2l2p  &      &  lil2ip  &      &  l2l2ip  &      &   lihgu  &      &   l2hgu  &      &   lihgp  &      &   l2ghp  &      &  lingip  &      &  l2ngip  &      &  lidivg  &      &  l2divg  &      &  litang  &      &  l2tang  ")
-    #     print(f"{ndof:.2E} &      & {l2u:.2E} &      & {h1u:.2E} &      & {l2p:.2E} &      & {h1p:.2E} &      & {l2l2p:.2E} &      & {max_pintl2:.2E} &      & {l2_pintl2:.2E} &      & {max_ngu:.2E} &      & {l2_ngu:.2E} &      & {max_ngp:.2E} &      & {l2_ngp:.2E} &      & {max_ngip:.2E} &      & {l2_ngip:.2E} &      & {max_divg:.2E} &      & {l2_divg:.2E} &      & {max_tang:.2E} &      & {l2_tang:.2E}")
-    #
-    # l2us.append(l2u)
-    # h1us.append(h1u)
-    # l2ps.append(l2p)
-    # h1ps.append(h1p)
-    # l2l2ps.append(l2l2p)
-    # max_pintl2s.append(max_pintl2)
-    # l2_pintl2s.append(l2_pintl2)
-    # max_ngus.append(max_ngu)
-    # l2_ngus.append(l2_ngu)
-    # max_ngps.append(max_ngp)
-    # l2_ngps.append(l2_ngp)
-    # max_ngips.append(max_ngip)
-    # l2_ngips.append(l2_ngip)
-    # max_divgs.append(max_divg)
-    # l2_divgs.append(l2_divg)
-    # max_tangs.append(max_tang)
-    # l2_tangs.append(l2_tang)

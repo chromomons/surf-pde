@@ -21,6 +21,7 @@ max_nref = params['max_nref']
 fname = params['fname']
 plt_out = params['plt_out']
 bad_rhs = params['bad_rhs']
+lamb = params['lamb']
 
 mass_cf = 0.0
 
