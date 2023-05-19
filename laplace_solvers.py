@@ -75,8 +75,8 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
         stab_type = args['stab_type']
 
         m = BilinearForm(V, symmetric=True)  # mass
-        d = BilinearForm(V, symmetric=True)  # diffusion
-        a = BilinearForm(V, symmetric=True)  # mass-diffusion
+        d = BilinearForm(V, symmetric=True)  # total_stab_tests_diffusion
+        a = BilinearForm(V, symmetric=True)  # mass-total_stab_tests_diffusion
 
         # mass part
         m += u * v * ds
@@ -88,11 +88,11 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
             a += 2.0 / (alpha * dt) * h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
 
         if stab_type in ['old', 'total']:
-            # stabilizing diffusion part
+            # stabilizing total_stab_tests_diffusion part
             d += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
             a += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
 
-        # diffusion part
+        # total_stab_tests_diffusion part
         a += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
         d += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
 
@@ -112,9 +112,8 @@ def append_errors(t_curr, l2u, h1u, **errs):
     errs['l2us'].append(l2u)
     errs['h1us'].append(h1u)
 
+
 # SOLVERS
-
-
 def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     if order < 3:
         precond_name = "bddc"
@@ -228,7 +227,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
 
     ### bilinear forms:
     bilinear_form_args = {'alpha': alpha, 'dt': dt, 'stab_type': stab_type}
-    m, d, a, f = define_forms(eq_type='diffusion', V=V, n=n, Pmat=Pmat, rhsf=rhsf, ds=ds, dX=dX, **bilinear_form_args)
+    m, d, a, f = define_forms(eq_type='total_stab_tests_diffusion', V=V, n=n, Pmat=Pmat, rhsf=rhsf, ds=ds, dX=dX, **bilinear_form_args)
 
     start = time.perf_counter()
     with TaskManager():
@@ -251,6 +250,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     t.Set(0.0)
 
     if bad_rhs:
+        gfu_el = GridFunction(V)
         rhsf_el = CoefficientFunction(exact["f"] + exact["u"]).Compile()
         bilinear_form_args = {'mass_cf': 1.0}
         a_el, f_el = define_forms(eq_type='poisson', V=V, n=n, Pmat=Pmat, rhsf=rhsf_el, ds=ds, dX=dX, **bilinear_form_args)
@@ -258,9 +258,10 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
         with TaskManager():
             prea_el = Preconditioner(a_el, precond_name)
             assemble_forms([a_el, f_el])
-            solvers.CG(mat=a_el.mat, pre=prea_el.mat, rhs=f_el.vec, sol=gfu.vec, maxsteps=cg_iter, initialize=True, tol=1e-12,
+            solvers.CG(mat=a_el.mat, pre=prea_el.mat, rhs=f_el.vec, sol=gfu_el.vec, maxsteps=cg_iter, initialize=True, tol=1e-12,
                        printrates=False)
         sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
+        gfu.Set(tfun * gfu_el)
         print(f"{bcolors.OKGREEN}IC computed      ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
     else:
         mesh.SetDeformation(deformation)

@@ -235,6 +235,7 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         # normal gradient in the bulk stabilization
         # SHOULD IT BE rho_p OR rho_u?
         ap += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
+        # ap += (rho_p + rho_u) * ((grad(p) * n) * (grad(q) * n)) * dX
 
         # pressure total_stab_tests_diffusion matrix
         pd = BilinearForm(Q, symmetric=True)
@@ -242,6 +243,7 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         pd += InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
         pd += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
+        # pd += rho_u * ((grad(p) * n) * (grad(q) * n)) * dX
 
         # discrete divergence operator
         b = BilinearForm(trialspace=V, testspace=Q)
@@ -349,7 +351,7 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
 
     start = time.perf_counter()
     with TaskManager():
-        solvers.MinRes(mat=K, pre=C, rhs=rhs, sol=sol, initialize=True, maxsteps=100, tol=1e-12)
+        solvers.MinRes(mat=K, pre=C, rhs=rhs, sol=sol, initialize=True, maxsteps=40, tol=1e-12)
     print(f"{bcolors.OKBLUE}System solved    ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     ### POST-PROCESSING
@@ -432,7 +434,6 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
         rhsf=rhsf, rhsg=rhsg,
         ds=ds, dX=dX, **bilinear_form_args)
 
-
     start = time.perf_counter()
     with TaskManager():
         presq = Preconditioner(sq, "bddc")
@@ -456,7 +457,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     M = BlockMatrix([[m.mat, None],
                      [None, zeroq.mat]])
 
-    maxsteps_minres = 200
+    maxsteps_minres = 40
 
     inva = CGSolver(a.mat, prea.mat, maxsteps=5, precision=1e-4)
     invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-4)
@@ -558,7 +559,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **exact):
+def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, outer_gmres_iter=20, nref=0, tol=1e-12, n_gmres = 50, is_reltol=True, **exact):
     nu = exact['nu']
     phi = CoefficientFunction(exact["phi"]).Compile()
     # Levelset adaptation
@@ -639,8 +640,6 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
 
     # LINEAR SOLVER
 
-    maxsteps_outer_gmres = 40
-
     invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-6)
     invpd = CGSolver(pd.mat, prepd.mat, maxsteps=5, precision=1e-6)
 
@@ -679,7 +678,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
         with TaskManager():
             assemble_forms([f, g, a, ap])
 
-            inva = GMRESSolver(a.mat, prea.mat, maxsteps=5000, precision=1e-6)
+            inva = GMRESSolver(a.mat, prea.mat, maxsteps=n_gmres*int(2**(nref)), precision=1e-6)
             invms = invsq @ ap.mat @ invpd
 
             A = BlockMatrix([[a.mat, b.mat.T],
@@ -694,8 +693,12 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
             rhs.data = F - A * U
 
             gfu_prev.Set(gfu)
+            diff = BlockVector([0.0 * diffu, 0.0 * diffp])
 
-            solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=maxsteps_outer_gmres, tol=1e-9)
+            if is_reltol:
+                solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=outer_gmres_iter, reltol=tol)
+            else:
+                solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=outer_gmres_iter, tol=tol)
             U += diff
 
             renormalize(Q, mesh, ds, gfp, domMeas)
@@ -722,383 +725,3 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
     mesh.UnsetDeformation()
 
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
-
-
-def stokes_new_stab(mesh, dt, tfinal=1.0, order=2, out=False, scheme='tr-bdf2', **exact):
-    phi = CoefficientFunction(exact["phi"]).Compile()
-    # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(phi)
-    lset_approx = lsetmeshadap.lset_p1
-    mesh.SetDeformation(deformation)
-
-    alpha = 2.0 - np.sqrt(2.0)
-
-    t = Parameter(0.0)
-    tfun = 2. + sin(pi * t)
-    tfunInt = 2. * t + 1. / pi * (1. - cos(pi * t))
-    tfun_dif = tfun.Diff(t)
-
-    # FESpace: Taylor-Hood element
-    VPhk = VectorH1(mesh, order=order, dirichlet=[])
-    Phkm1 = H1(mesh, order=order - 1, dirichlet=[])
-
-    Phkp1 = H1(mesh, order=order + 1, dirichlet=[])
-    Phk = H1(mesh, order=order, dirichlet=[])
-
-    VPhkm1 = VectorH1(mesh, order=order - 1, dirichlet=[])
-
-    ci = CutInfo(mesh, lset_approx)
-
-    V = Compress(VPhk, GetDofsOfElements(VPhk, ci.GetElementsOfType(IF)))
-    Q = Compress(Phkm1, GetDofsOfElements(Phkm1, ci.GetElementsOfType(IF)))
-
-    u, v = V.TnT()
-    p, q = Q.TnT()
-
-    # declare grid functions to store the solution
-    gfu = GridFunction(V)
-    gfp = GridFunction(Q)
-
-    phi_kp1 = GridFunction(Phkp1)
-    n_k = GridFunction(VPhk)
-    phi_k = GridFunction(Phk)
-    n_km1 = GridFunction(VPhkm1)
-
-    phi_kp1.Set(phi)
-    n_k.Set(Normalize(grad(phi_kp1)))
-    phi_k.Set(phi)
-    n_km1.Set(Normalize(grad(phi_k)))
-    Hmat = grad(n_km1)
-
-    # declare the integration domains
-    ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
-    dX = dx(definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
-
-    h = specialcf.mesh_size
-    domMeas = get_dom_measure(Q, mesh, ds)
-
-    uSol = CoefficientFunction((tfun * exact["u1"], tfun * exact["u2"], tfun * exact["u3"])).Compile()
-    pSol = CoefficientFunction(tfun * exact["p"]).Compile()
-    pIntSol = CoefficientFunction(tfunInt * exact["p"]).Compile()
-    rhsf = CoefficientFunction((tfun * exact["f1"] + tfun_dif * exact["u1"],
-                                tfun * exact["f2"] + tfun_dif * exact["u2"],
-                                tfun * exact["f3"] + tfun_dif * exact["u3"])).Compile()
-    rhsg = CoefficientFunction(tfun * exact["g"]).Compile()
-
-    # define projection matrix
-    n = Normalize(grad(lset_approx))
-    Pmat = Id(3) - OuterProduct(n, n)
-
-    ### bilinear forms:
-    # penalization parameters
-    tau = 1.0 / (h * h)
-    rho_u = 1.0 / h
-    rho_p = 1.0 * h
-
-    # Mass matrix
-    m = BilinearForm(V, symmetric=True)
-    m += InnerProduct(Pmat * u, Pmat * v) * ds
-
-    # A_h part
-    a = BilinearForm(V, symmetric=True)
-    if scheme == 'bdf1':
-        a += 1.0 / dt * InnerProduct(u, Pmat * v) * ds
-    elif scheme == 'cn':
-        a += 2.0 / dt * InnerProduct(u, Pmat * v) * ds
-    else:
-        # tr-bdf2
-        a += 2.0 / (alpha * dt) * InnerProduct(u, Pmat * v) * ds
-
-    a += (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat, Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
-    # penalization of the normal component of the velocity
-    a += (tau * ((u * n_k) * (v * n_k))) * ds
-    # normal gradient volume stabilization of the velocity
-    if scheme == 'bdf1':
-        a += (h / dt * InnerProduct(grad(u) * n, grad(v) * n)) * dX
-    elif scheme == 'cn':
-        a += (2.0 * h / dt * InnerProduct(grad(u) * n, grad(v) * n)) * dX
-    else:
-        a += (2.0 * h / (alpha * dt) * InnerProduct(grad(u) * n, grad(v) * n)) * dX
-
-    a2 = BilinearForm(V, symmetric=True)
-    a2 += (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat, Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
-    # penalization of the normal component of the velocity
-    a2 += (tau * ((u * n_k) * (v * n_k))) * ds
-    # normal gradient volume stabilization of the velocity
-
-    # b_T part
-    b = BilinearForm(trialspace=V, testspace=Q)
-    b += (InnerProduct(u, Pmat * grad(q))) * ds
-    # normal gradient volume stabilization of the pressure,
-    # c part
-    c = BilinearForm(Q, symmetric=True)
-    c += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
-
-    # pressure preconditioner
-    sq = BilinearForm(Q, symmetric=True)
-    sq += p * q * ds
-    sq += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
-
-    zerou = BilinearForm(V, symmetric=True)
-    zerou += 0.0 * u * v * ds
-
-    zeroq = BilinearForm(Q, symmetric=True)
-    zeroq += 0.0 * p * q * ds
-
-    f = LinearForm(V)
-    f += rhsf * (Pmat * v) * ds
-    g = LinearForm(Q)
-    g += (-1.0) * rhsg * q * ds
-
-    start = time.perf_counter()
-    with TaskManager():
-        presq = Preconditioner(sq, "bddc")
-        prea = Preconditioner(a, "bddc")
-
-        a.Assemble()
-        a2.Assemble()
-        b.Assemble()
-        c.Assemble()
-        sq.Assemble()
-        m.Assemble()
-
-        zerou.Assemble()
-        zeroq.Assemble()
-
-        f.Assemble()
-        g.Assemble()
-
-    print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
-
-    ### LINEAR SOLVER
-
-    if scheme == 'bdf1' or scheme == 'cn':
-        t_next = dt
-    else:
-        t_next = dt * alpha
-
-    if scheme == 'bdf1':
-        A2 = BlockMatrix([[a2.mat, b.mat.T],
-                          [b.mat, - (dt / t_next) * c.mat]])
-    elif scheme == 'cn':
-        Atr = BlockMatrix([[2.0 * a2.mat, 2.0 * b.mat.T],
-                           [b.mat, - (dt / t_next) * c.mat]])
-    else:
-        Atr = BlockMatrix([[2.0 * a2.mat, 2.0 * b.mat.T],
-                           [b.mat, - (dt * alpha / t_next) * c.mat]])
-
-    M = BlockMatrix([[m.mat, None],
-                     [None, zeroq.mat]])
-
-    maxsteps_cg = 5
-    maxsteps_minres = 1000
-
-    inva = CGSolver(a.mat, prea.mat, maxsteps=maxsteps_cg, precision=1e-4)
-    invsq = CGSolver(sq.mat, presq.mat, maxsteps=maxsteps_cg, precision=1e-4)
-
-    C = BlockMatrix([[inva, None], [None, invsq]])
-
-    U = BlockVector([gfu.vec, gfp.vec])
-    diff = BlockVector([gfu.vec.CreateVector(), gfp.vec.CreateVector()])
-
-    F = BlockVector([f.vec, g.vec])
-    fold = f.vec.CreateVector()
-    zerofunQ = GridFunction(Q)
-    zerofunQ.Set(CoefficientFunction(0.0))
-    Fold = BlockVector([fold, zerofunQ.vec])
-
-    # TIME MARCHING
-
-    t_curr = 0.0  # time counter within one block-run
-
-    # IC
-    t.Set(0.0)
-
-    gfu.Set(uSol)
-    gfp.Set(pSol)
-
-    pold = GridFunction(Q)
-    pold.Set(pSol)
-
-    pint = GridFunction(Q)
-    pint.Set(CoefficientFunction(0.0))
-    pIntGf = GridFunction(Q)
-
-    if out:
-        vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, deformation, gfu, gfp, uSol, pSol],
-                        names=["P1-levelset", "deform", "u", "p", "uSol", "pSol"],
-                        filename=f"./vtk_out/parab/{exact['name']}",
-                        subdivision=0)
-        vtk.Do(time=0.0)
-
-    rhs1 = f.vec.CreateVector()
-    rhs2 = g.vec.CreateVector()
-    rhs = BlockVector([rhs1, rhs2])
-
-    ts = []
-    l2us = []
-    h1us = []
-    l2ps = []
-    h1ps = []
-    pintl2s = []
-    ngus = []
-    ngps = []
-    ngips = []
-    divgs = []
-    tangs = []
-
-    ts.append(t_curr)
-    l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
-    errs = errors_ex(mesh, dX, n, gfu, gfp, ds, Pmat, Hmat, h, dt, h, h / dt)
-    l2us.append(l2u)
-    h1us.append(h1u)
-    l2ps.append(l2p)
-    h1ps.append(h1p)
-    ngus.append(errs['ngu'])
-    ngps.append(errs['ngp'])
-    divgs.append(errs['divg'])
-    tangs.append(errs['tang'])
-
-    start = time.perf_counter()
-
-    fold.data = f.vec
-    i = 0
-    while t_curr < tfinal - 0.5 * dt:
-        pIntGf.Set(pIntSol)
-        pintl2s.append(sqrt(Integrate((pint - pIntSol) * (pint - pIntSol) * ds, mesh)))
-        ngips.append(sqrt(Integrate(InnerProduct(grad(pint) * n, grad(pint) * n) * dX, mesh)))
-        if scheme == 'bdf1' or scheme == 'cn':
-            t_next = t_curr + dt
-        else:
-            t_next = t_curr + dt * alpha
-        if scheme == 'bdf1':
-            A = BlockMatrix([[a.mat, b.mat.T],
-                             [b.mat, - (dt / t_next) * c.mat]])
-            A2 = BlockMatrix([[a2.mat, b.mat.T],
-                              [b.mat, - (dt / t_next) * c.mat]])
-        elif scheme == 'cn':
-            A = BlockMatrix([[a.mat, b.mat.T],
-                             [b.mat, - (dt / (2.0 * t_next)) * c.mat]])
-            Atr = BlockMatrix([[2.0 * a2.mat, 2.0 * b.mat.T],
-                               [b.mat, - (dt / t_next) * c.mat]])
-        else:
-            A = BlockMatrix([[a.mat, b.mat.T],
-                             [b.mat, - (dt * alpha / (2.0 * t_next)) * c.mat]])
-            Atr = BlockMatrix([[2.0 * a2.mat, 2.0 * b.mat.T],
-                               [b.mat, - (dt * alpha / t_next) * c.mat]])
-
-        if scheme == 'bdf1':
-            t.Set(t_curr + dt)
-            with TaskManager():
-                f.Assemble()
-                g.Assemble()
-
-            rhs.data = F - A2 * U
-            if i > 0:
-                rhs2.data += (1 / t_next) * (c.mat * pint.vec)
-
-            with TaskManager():
-                solvers.MinRes(mat=A, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=maxsteps_minres, tol=1e-12,
-                               printrates=False)
-                U.data += diff
-                renormalize(Q, mesh, ds, gfp, domMeas)
-                pint.vec.data += dt * gfp.vec
-
-        elif scheme == 'cn':
-            t.Set(t_curr + dt)
-            with TaskManager():
-                f.Assemble()
-                g.Assemble()
-
-            rhs.data = Fold + F - Atr * U
-            if i > 0:
-                rhs2.data += (1 / t_next) * (c.mat * pint.vec)
-            with TaskManager():
-                solvers.MinRes(mat=A, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=maxsteps_minres, tol=1e-12,
-                               printrates=False)
-                U.data += diff
-                renormalize(Q, mesh, ds, gfp, domMeas)
-                pint.vec.data += (dt / 2.0 * (gfp.vec + pold.vec))
-                pold.Set(gfp)
-        else:
-            t.Set(t_curr + alpha * dt)
-            with TaskManager():
-                f.Assemble()
-                g.Assemble()
-
-            # TR
-            rhs.data = Fold + F - Atr * U
-            if i > 0:
-                rhs2.data += (1 / t_next) * (c.mat * pint.vec)
-            with TaskManager():
-                solvers.MinRes(mat=A, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=maxsteps_minres, tol=1e-12,
-                               printrates=False)
-                U.data += diff
-                renormalize(Q, mesh, ds, gfp, domMeas)
-                pint.vec.data += ((alpha * dt / 2) * (gfp.vec + pold.vec))
-                pold.Set(gfp)
-
-            # BDF2
-            pIntGf.Set(pIntSol)
-            t_next = t_curr + dt
-            Abdf2 = BlockMatrix([[a.mat, b.mat.T],
-                                 [b.mat, -((1.0 - alpha) * dt / (alpha * t_next)) * c.mat]])
-            A2bdf2 = BlockMatrix([[a2.mat, b.mat.T],
-                                  [b.mat, -((1.0 - alpha) * dt / (alpha * t_next)) * c.mat]])
-
-            t.Set(t_curr + dt)
-            with TaskManager():
-                f.Assemble()
-                g.Assemble()
-
-            rhs.data = F + (1.0 - alpha) / (alpha * dt) * M * diff - A2bdf2 * U
-            if i > 0:
-                rhs2.data += (1 / t_next) * (c.mat * pint.vec)
-            with TaskManager():
-                solvers.MinRes(mat=Abdf2, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=maxsteps_minres,
-                               tol=1e-12,
-                               printrates=False)
-                U.data += diff
-                renormalize(Q, mesh, ds, gfp, domMeas)
-                pint.vec.data += (((1 - alpha) * dt / 2) * (gfp.vec + pold.vec))
-                pold.Set(gfp)
-
-        t_curr += dt
-
-        fold.data = f.vec
-
-        print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
-
-        ts.append(t_curr)
-
-        with TaskManager():
-            l2u, h1u, l2p, h1p = errors(mesh, ds, Pmat, gfu, gfp, uSol, pSol)
-            errs_ex = errors_ex(mesh, dX, n, gfu, gfp, ds, Pmat, Hmat, h, dt, h, h / dt)
-
-        l2us.append(l2u)
-        h1us.append(h1u)
-        l2ps.append(l2p)
-        h1ps.append(h1p)
-        ngus.append(errs_ex['ngu'])
-        ngps.append(errs_ex['ngp'])
-        divgs.append(errs_ex['divg'])
-        tangs.append(errs_ex['tang'])
-
-        if out:
-            with TaskManager():
-                vtk.Do(time=t_curr)
-        i += 1
-
-    pIntGf.Set(pIntSol)
-    pintl2s.append(sqrt(Integrate((pint - pIntSol) * (pint - pIntSol) * ds, mesh)))
-    ngips.append(sqrt(Integrate(InnerProduct(grad(pint) * n, grad(pint) * n) * dX, mesh)))
-
-    print("")
-    end = time.perf_counter()
-    print(f" Time elapsed: {end - start: .5f} s")
-
-    mesh.UnsetDeformation()
-
-    return V.ndof + Q.ndof, ts, l2us, h1us, l2ps, h1ps, pintl2s, ngus, ngps, ngips, divgs, tangs

@@ -46,10 +46,10 @@ My machine:
 - `Cores: 8`
 - `Threads per core: 2`
 - `Caches (sum of all)`:     
-  - `L1d:                   256 KiB (8 instances)`
-  - `L1i:                   256 KiB (8 instances)`
-  - `L2:                    4 MiB (8 instances)`
-  - `L3:                    16 MiB (1 instance)`
+  - `L1d: 256 KiB (8 instances)`
+  - `L1i: 256 KiB (8 instances)`
+  - `L2:  4 MiB (8 instances)`
+  - `L3:  16 MiB (1 instance)`
 
 ### Installation
 Assuming `ngsxfem=2.0.2105` and `ngsolve=6.2.2105` are installed correcly, it should suffice to just clone this repository and run it.
