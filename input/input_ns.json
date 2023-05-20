@@ -1,0 +1,10 @@
+{
+  "mode": "reu_circ",
+  "nu": 1.0,
+  "order": 2,
+  "unif_ref": 2,
+  "max_nref": 4,
+  "fname": "data",
+  "printrates": false,
+  "plt_out": false
+}

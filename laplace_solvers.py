@@ -103,7 +103,7 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
 def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     """
     Solves Poisson equation (with an added mass term to allow non-mean-zero right-hand-sides) on a provided mesh.
-    The initial data and RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
+    The initial data and the RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
@@ -203,7 +203,8 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
 
 def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs=False, **exact):
     """
-
+    Solves diffusion equation on a provided mesh. The initial data and RHS needs to be specified in a dictionary exact.
+    VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.

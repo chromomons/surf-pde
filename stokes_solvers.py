@@ -13,6 +13,49 @@ from utils import bcolors, assemble_forms, get_dom_measure, renormalize, mass_ap
 
 # HELPER
 def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
+    """
+    Routine that defines bilinear and linear forms for the steady and unsteady Stokes, and unsteady Navier-Stokes.
+    Args:
+        eq_type: str
+            Type of PDE: "steady_stokes", "stokes" or "navier-stokes" (default)
+        V: Compressed VectorH1 space
+            TraceFEM space for u (velocity)
+        Q: Compressed H1 space
+            TraceFEM space for p (pressure)
+        n: Vector-valued GridFunction
+            Discrete normal vector
+        Pmat: Tensor-valued GridFunction
+            Discrete projection matrix
+        Hmat: Tensor-valued GridFunction
+            Discrete shape operator
+        n_k: Vector-valued GridFunction
+            Higher-order approximation of the normal vector
+        rhsf: Vector-valued CoefficientFunction
+            Right-hand side of the momentum equation
+        rhsg: CoefficientFunction
+            Right-hand side of the continuity equation
+        ds: xfem.dCul
+            Element of area on Gamma
+        dX: ngsolve.utils.dx
+            Element of bulk volume
+        **args:
+        Parameters that are problem-dependent, like
+            args['alpha']: float
+                Coefficient in front of the mass term for steady Stokes, or parameter for TR-BDF2 for unsteady Stokes
+                (will need to change this confusing notation)
+            args['nu']: float
+                Coefficient of kinematic viscocity
+            args['dt']: float
+                Time step size
+            args['nu']: float
+                Coefficient of kinematic viscocity for Navier-Stokes
+            args['dt_param']: float
+                Coefficient in front of the mass term for time discretizations (e.g. 3/2 for BDF2)
+            args['gfu_approx']: Vector-valued GridFunction
+                Extrapolation of u at t=t_{n+1} for linearization of the convection term in Navier-Stokes
+    Returns:
+        A tuple of bilinear and linear problems relevant to the problem
+    """
     u, v = V.TnT()
     p, q = Q.TnT()
     h = specialcf.mesh_size
@@ -124,40 +167,39 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         m = BilinearForm(V, symmetric=True)
         m += InnerProduct(Pmat * u, Pmat * v) * ds
 
-        # velocity mass-convection-total_stab_tests_diffusion matrix
         a = BilinearForm(V, symmetric=False)
         # mass part
         a += dtparam / dt * InnerProduct(Pmat * u, Pmat * v) * ds
-        # total_stab_tests_diffusion part
+        # diffusion part
         a += nu * (
             InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat, Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
-        # convection part
-        a += InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * (Pmat * gfu_approx), Pmat * v) * ds
+        # convection part, skew-symmetrized
+        # a += InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * (Pmat * gfu_approx), Pmat * v) * ds
+        a += 0.5 * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * (Pmat * gfu_approx), Pmat * v) * ds
+        a += (-0.5) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * (Pmat * gfu_approx), Pmat * u) * ds
+        a += (-0.5) * rhsg * InnerProduct(Pmat * u, Pmat * v) * ds
         # penalization of the normal component of the velocity
-        a += (tau * ((u * n_k) * (v * n_k))) * ds
+        a += tau * ((u * n_k) * (v * n_k)) * ds
         # normal gradient in the bulk stabilization
         a += (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
 
-        # pressure mass-convection-total_stab_tests_diffusion matrix
+        # pressure mass-convection-diffusion matrix
         ap = BilinearForm(Q, symmetric=False)
         # mass part
         ap += dtparam / dt * p * q * ds
-        # total_stab_tests_diffusion
+        # diffusion part
         ap += nu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # convection
         ap += InnerProduct(Pmat * grad(p), Pmat * gfu_approx) * q * ds
         # normal gradient in the bulk stabilization
-        # SHOULD IT BE rho_p OR rho_u?
         ap += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
-        # ap += (rho_p + rho_u) * ((grad(p) * n) * (grad(q) * n)) * dX
 
-        # pressure total_stab_tests_diffusion matrix
+        # pressure diffusion matrix
         pd = BilinearForm(Q, symmetric=True)
         # total_stab_tests_diffusion
         pd += InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
         pd += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
-        # pd += rho_u * ((grad(p) * n) * (grad(q) * n)) * dX
 
         # discrete divergence operator
         b = BilinearForm(trialspace=V, testspace=Q)
@@ -182,6 +224,47 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
 
 # SOLVERS
 def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
+    """
+    Solves Steady Stokes problem (with an added mass term to allow non-mean-zero right-hand-sides) on a provided mesh
+    using P_k-P_{k-1} Taylor-Hood pair. The initial data and RHS needs to be specified in a dictionary exact. VTK output
+    can be provided if enabled.
+    See http://arxiv.org/abs/1801.06589, http://arxiv.org/abs/2103.03843 for details of the scheme.
+    Args:
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma and is (ideally) refined around it.
+        alpha: float
+            Parameter in front of mass term. Set to 1.0 by default.
+        order: int
+            Polynomial order for velocity, default 2.
+        out: bool
+            Flag that indicates if VTK output is to be created.
+        **exact: Dict
+            A dictionary that contains information about the exact solution.
+            exact['name']: str
+                Name of the test case, refer to steady_stokes_test.py for more details.
+            exact['phi']: CoefficientFunction
+                The levelset function.
+            exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
+                Each of the three components of the velocity solution of the PDE.
+            exact['p']: CoefficientFunction
+                Pressure solution of the PDE.
+            exact['f1'], exact['f2'], exact['f3']: CoefficientFunction
+                Each of the three components of the right-hand-side of the momentum equation.
+            exact['g']: CoefficientFunction
+                Right-hand-side of the continuity equation.
+
+    Returns:
+        V.ndof + Q.ndof: int
+            Number of degrees of freedom of the problem.
+        l2u: float
+            L^2-error of the velocity over Gamma
+        h1u: float
+            H^1-error of the velocity over Gamma
+        l2p: float
+            L^2-error of the pressure over Gamma
+        h1p: float
+            H^1-error of the pressure over Gamma
+    """
     phi = CoefficientFunction(exact["phi"]).Compile()
     ### Levelset adaptation
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
@@ -280,6 +363,51 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
 
 
 def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
+    """
+    Solves Unsteady Stokes problem on a provided mesh using P_k-P_{k-1} Taylor-Hood pair.
+    The initial data and RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
+    Args:
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma and is (ideally) refined around it.
+        dt: float
+            Time step size.
+        tfinal: float
+            Final time in the simulation.
+        order: int
+            Polynomial order for velocity, default 2.
+        out: bool
+            Flag that indicates if VTK output is to be created.
+        **exact: Dict
+            A dictionary that contains information about the exact solution. Note that the CoefficientFunctions
+            should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
+            using OOP.
+            exact['name']: str
+                Name of the test case, refer to steady_stokes_test.py for more details.
+            exact['phi']: CoefficientFunction
+                The levelset function.
+            exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
+                Each of the three components of the velocity solution of the PDE.
+            exact['p']: CoefficientFunction
+                Pressure solution of the PDE.
+            exact['f1'], exact['f2'], exact['f3']: CoefficientFunction
+                Each of the three components of the right-hand-side of the momentum equation.
+            exact['g']: CoefficientFunction
+                Right-hand-side of the continuity equation.
+
+    Returns:
+        V.ndof + Q.ndof: int
+            Number of degrees of freedom of the problem.
+        ts: List[float]
+            Discrete times t_n at which problem was solved.
+        l2us: List[float]
+            L^2-error of the velocity over Gamma at each time t_n
+        h1us: List[float]
+            H^1-error of the velocity over Gamma at each time t_n
+        l2ps: List[float]
+            L^2-error of the pressure over Gamma at each time t_n
+        h1ps: List[float]
+            H^1-error of the pressure over Gamma at each time t_n
+    """
     phi = CoefficientFunction(exact["phi"]).Compile()
     # Levelset adaptation
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
@@ -463,14 +591,63 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, outer_gmres_iter=20, nref=0, tol=1e-12, n_gmres=50, is_reltol=True, **exact):
+def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **exact):
+    """
+    Solves Unsteady Navier-Stokes problem on a provided mesh using P_k-P_{k-1} Taylor-Hood pair.
+    The initial data and RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
+    Args:
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma and is (ideally) refined around it.
+        dt: float
+            Time step size.
+        tfinal: float
+            Final time in the simulation.
+        order: int
+            Polynomial order for velocity, default 2.
+        out: bool
+            Flag that indicates if VTK output is to be created.
+        printrates: bool
+            Flag that indicates if GMRes residuals are to be printed.
+        **exact: Dict
+            A dictionary that contains information about the exact solution. Note that the CoefficientFunctions
+            should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
+            using OOP.
+            exact['name']: str
+                Name of the test case, refer to steady_stokes_test.py for more details.
+            exact['phi']: CoefficientFunction
+                The levelset function.
+            exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
+                Each of the three components of the velocity solution of the PDE.
+            exact['p']: CoefficientFunction
+                Pressure solution of the PDE.
+            exact['f1'], exact['f2'], exact['f3']: CoefficientFunction
+                Each of the three components of the right-hand-side of the momentum equation.
+            exact['g']: CoefficientFunction
+                Right-hand-side of the continuity equation.
+            exact['conv1'], exact['conv2'], exact['conv3']: CoefficientFunction
+                A symbolic expression corresponding to $\\mathbf{u}_T \\cdot \\nabla_{\\Gamma} \\mathbf{u}_T$
+                where $\\mathbf{u}$ is the solution of the steady Stokes problem.
+
+    Returns:
+        V.ndof + Q.ndof: int
+            Number of degrees of freedom of the problem.
+        ts: List[float]
+            Discrete times t_n at which problem was solved.
+        l2us: List[float]
+            L^2-error of the velocity over Gamma at each time t_n
+        h1us: List[float]
+            H^1-error of the velocity over Gamma at each time t_n
+        l2ps: List[float]
+            L^2-error of the pressure over Gamma at each time t_n
+        h1ps: List[float]
+            H^1-error of the pressure over Gamma at each time t_n
+    """
     nu = exact['nu']
     phi = CoefficientFunction(exact["phi"]).Compile()
     # Levelset adaptation
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
     deformation = lsetmeshadap.CalcDeformation(phi)
     lset_approx = lsetmeshadap.lset_p1
-    mesh.SetDeformation(deformation)
 
     t = Parameter(-dt)
     tfun = 1.0 + sin(pi * t)
@@ -512,11 +689,15 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
     Pmat = Id(3) - OuterProduct(n, n)
 
     t.Set(-dt)
+    mesh.SetDeformation(deformation)
     gfu_prev.Set(uSol)
+    mesh.UnsetDeformation()
 
     t.Set(0.0)
+    mesh.SetDeformation(deformation)
     gfu.Set(uSol)
     gfp.Set(pSol)
+    mesh.UnsetDeformation()
 
     gfu_approx.Set(2. * gfu - gfu_prev)
     dtparam = 3./2
@@ -574,7 +755,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
     with TaskManager():
         l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
         l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
-    mass_append(keys=keys, vals=[l2u, h1u, l2p, h1p], **out_errs)
+    mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
     start = time.perf_counter()
 
@@ -584,7 +765,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
         with TaskManager():
             assemble_forms([f, g, a, ap])
 
-            inva = GMRESSolver(a.mat, prea.mat, maxsteps=n_gmres*int(2**(nref)), precision=1e-6)
+            inva = GMRESSolver(a.mat, prea.mat, maxsteps=2000, precision=1e-6)
             invms = invsq @ ap.mat @ invpd
 
             A = BlockMatrix([[a.mat, b.mat.T],
@@ -599,12 +780,8 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
             rhs.data = F - A * U
 
             gfu_prev.Set(gfu)
-            diff = BlockVector([0.0 * diffu, 0.0 * diffp])
 
-            if is_reltol:
-                solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=outer_gmres_iter, reltol=tol)
-            else:
-                solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=outer_gmres_iter, tol=tol)
+            solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=100, reltol=1e-12)
             U += diff
 
             renormalize(Q, mesh, ds, gfp, domMeas)
@@ -619,7 +796,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
         with TaskManager():
             l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
             l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
-        mass_append(keys=keys, vals=[l2u, h1u, l2p, h1p], **out_errs)
+        mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
         if out:
             with TaskManager():
@@ -628,7 +805,5 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, ou
     print("")
     end = time.perf_counter()
     print(f" Time elapsed: {end - start: .5f} s")
-
-    mesh.UnsetDeformation()
 
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
