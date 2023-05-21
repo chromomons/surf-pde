@@ -321,3 +321,37 @@ def helper_grid_functions(mesh, order, levelset, vel_space):
     Hmat = grad(n_km1)
 
     return n_k, Hmat
+
+
+# MOVING DOMAINS
+
+def update_ba_IF_band(lset_approx, mesh, band_size, ba_IF_band):
+    """
+    Updates BitArray of elements in the narrow band of size band_size around the discrete levelset function
+    (lset_approx) on the provided mesh. Intended to be used with evolving domains, where active dofs are changing
+    in time.
+    Args:
+        lset_approx: GridFunction
+            P1-approximation of the levelset function
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma_h
+        band_size: float
+            Size of the narrowband, in terms of the distance function lset_approx (not necessarily Euclidean distance)
+        ba_IF_band: pyngcore.BitArray
+            BitArray of active elements to be updated
+
+    Returns:
+
+    """
+    VGrid = H1(mesh, order=1)
+    lset_plus = GridFunction(VGrid)
+    lset_minus = GridFunction(VGrid)
+    InterpolateToP1(lset_approx - band_size, lset_plus)
+    InterpolateToP1(lset_approx + band_size, lset_minus)
+    ci_plus = CutInfo(mesh, lset_plus)
+    ci_minus = CutInfo(mesh, lset_minus)
+
+    ba_IF_band.Clear()
+    ba_IF_band |= ci_plus.GetElementsOfType(HASNEG)
+    ba_IF_band &= ci_minus.GetElementsOfType(HASPOS)
+    return
