@@ -2,6 +2,7 @@ from xfem.lsetcurv import *
 from netgen.csg import CSGeometry, OrthoBrick, Pnt
 from ngsolve import TaskManager
 
+
 # FORMATTING TOOLS
 class bcolors:
     """

@@ -56,7 +56,7 @@ Assuming `ngsxfem=2.0.2105` and `ngsolve=6.2.2105` are installed correcly, it sh
 
 ### Files
 The `.py` files can be grouped into three parts: 
-- _common utility files_: like `meshing.py` or `utils.py` are used by all other files
+- _common utility files_: like `utils.py` are used by all other files
 - _solvers_: routines that implement TraceFEM solvers. They are grouped by PDE type and geometry type, i.e. diffusion on an evolving surface or Navier-Stokes on a fixed surface.
 - _testers_: there is a tester file for each solver. It produces EOC, demos, etc.
 
@@ -65,7 +65,6 @@ The `.py` files can be grouped into three parts:
 `wolfram_mathamatica_notebooks/` folder contains Mathematica scripts that compute symbolic right-hand sides, and other exact quantities. 
 
 More concretely,
-- `meshing.py`: tools for mesh generation and refinement, intended to be called from testers, and not solvers.
 - `utils.py`: provides utility functions for both solvers and testers.
 - `math2py.py`: converts Wolfram Mathematica symbolic expressions to python expressions.
 - `laplace_solvers.py`: contains fixed-surface Poisson and diffusion solvers.
