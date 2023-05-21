@@ -67,8 +67,7 @@ The `.py` files can be grouped into three parts:
 More concretely,
 - `utils.py`: provides utility functions for both solvers and testers.
 - `math2py.py`: converts Wolfram Mathematica symbolic expressions to python expressions.
-- `laplace_solvers.py`: contains fixed-surface Poisson and diffusion solvers.
-- `moving_surface_diffusion.py`: contains evolving-surface diffusion solver.
+- `laplace_solvers.py`: contains fixed-surface Poisson and diffusion, and evolving-surface diffusion solvers.
 - `stokes_solvers.py`: contains fixed-surface steady and unsteady Stokes and unsteady Navier-Stokes solver.
 - `moving_surface_ns.py`: contains evolving-surface Navier-Stokes and tester inside (need to split them).
 - `poisson_test.py`: tests fixed-surface Poisson solver.

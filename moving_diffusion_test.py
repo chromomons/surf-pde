@@ -5,7 +5,7 @@ import numpy as np
 import scipy.integrate as sci
 import matplotlib.pyplot as plt
 import seaborn as sns
-from moving_surface_diffusion import Exact, moving_diffusion
+from laplace_solvers import Exact, moving_diffusion
 
 SetNumThreads(16)
 
