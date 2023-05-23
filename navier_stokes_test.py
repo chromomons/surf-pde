@@ -384,9 +384,9 @@ h1us = []
 l2ps = []
 h1ps = []
 
-for nref in range(max_nref+1):
-    h = 2*bbox_sz*2**(-unif_ref-nref)
-    dt = h**((order+1.0)/2)
+for nref in range(max_nref):
+    h = bbox_sz*2**(1-unif_ref-nref)
+    dt = h**((order+1)/2)
 
     if mesh:
         refine_at_levelset(mesh=mesh, levelset=exact['phi'], nref=1)

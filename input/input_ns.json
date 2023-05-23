@@ -2,8 +2,8 @@
   "mode": "reu_circ",
   "nu": 1.0,
   "order": 2,
-  "unif_ref": 2,
-  "max_nref": 4,
+  "unif_ref": 3,
+  "max_nref": 3,
   "fname": "data",
   "printrates": false,
   "plt_out": false

@@ -1,4 +1,3 @@
-from laplace_solvers import *
 from utils import *
 from ngsolve import SetNumThreads
 import numpy as np
@@ -6,6 +5,7 @@ import scipy.integrate as sci
 import matplotlib.pyplot as plt
 import seaborn as sns
 from laplace_solvers import Exact, moving_diffusion
+from math import pi
 
 SetNumThreads(16)
 
