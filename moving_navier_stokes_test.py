@@ -4,7 +4,7 @@ import numpy as np
 import scipy.integrate as sci
 import matplotlib.pyplot as plt
 import seaborn as sns
-from moving_surface_ns import Exact, moving_ns
+from moving_surface_ns import Exact, moving_ns, moving_ns_direct
 
 SetNumThreads(16)
 
@@ -151,9 +151,14 @@ for nref in range(max_nref):
     miniband = c_delta * dt * maxvel
     refine_around_lset(mesh, nref, exact.phi, band, miniband, band_type=band_type)
 
-    ndof, ts, l2uss, h1uss, l2pss, h1pss = moving_ns(
-        mesh=mesh, dt=dt, order=2, tfinal=tfinal, exact=exact, time_order=2, out=False, fname=mode
-    )
+    if mode == 'advect-nonsol':
+        ndof, ts, l2uss, h1uss, l2pss, h1pss = moving_ns_direct(
+            mesh=mesh, dt=dt, order=2, tfinal=tfinal, exact=exact, band=miniband, time_order=2, out=False, fname=mode
+        )
+    else:
+        ndof, ts, l2uss, h1uss, l2pss, h1pss = moving_ns(
+            mesh=mesh, dt=dt, order=2, tfinal=tfinal, exact=exact, band=miniband, time_order=2, out=False, fname=mode
+        )
 
     l2u = np.sqrt(sci.simps(y=np.array(l2uss) ** 2, x=ts, dx=dt, even='avg'))
     h1u = np.sqrt(sci.simps(y=np.array(h1uss) ** 2, x=ts, dx=dt, even='avg'))
