@@ -9,7 +9,7 @@ import time
 import sys
 import numpy as np
 from utils import renormalize, errors_scal, errors_vec, mass_append, \
-    update_ba_IF_band, helper_grid_functions, assemble_forms
+    update_geometry, helper_grid_functions, assemble_forms
 
 
 # EXACT SOLUTION CLASS
@@ -84,35 +84,6 @@ class Exact:
 
 
 # HELPERS
-
-
-def update_geometry(mesh, phi, lset_approx, band, ba_IF, ba_IF_band):
-    """
-    Helper function which is a wrapper around ba_IF_band.
-    Args:
-        mesh: ngsolve.comp.Mesh.Mesh
-            Mesh that contains surface Gamma and is (ideally) refined around it.
-        phi: CoefficientFunction
-            Levelset function
-        lset_approx: P1 GridFunction on mesh.
-            Variable for P1 approximation of the levelset.
-        band: float
-            Size of the band around levelset, the distance metric is in terms of the levelset function.
-        ba_IF: BitArray
-            Stores element numbers that are intersected by the surface.
-        ba_IF_band: BitArray
-            Stores element numbers that are in the narrowband around the surface.
-
-    Returns:
-
-    """
-    InterpolateToP1(phi, lset_approx)
-    ci = CutInfo(mesh, lset_approx)
-
-    ba_IF.Clear()
-    ba_IF |= ci.GetElementsOfType(IF)
-    update_ba_IF_band(lset_approx, mesh, band, ba_IF_band)
-
 
 def set_ic(mesh, V, order, gfu_prevs, exact, dt,
            lsetmeshadap, lset_approx, band, ba_IF, ba_IF_band,

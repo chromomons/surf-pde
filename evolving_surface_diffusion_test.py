@@ -88,7 +88,7 @@ for nref in range(max_nref):
     refine_around_lset(mesh, nref, exact.phi, band, miniband, band_type=band_type)
 
     ndof, ts, l2uss, h1uss = moving_diffusion(mesh=mesh, dt=dt, order=order, tfinal=tfinal,
-                                                  exact=exact, time_order=time_order)
+                                              exact=exact, band=miniband, time_order=time_order)
 
     if plt_out:
         plt.plot(l2uss)

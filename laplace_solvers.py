@@ -8,7 +8,7 @@ import time
 import sys
 import numpy as np
 from math import pi
-from utils import bcolors, assemble_forms, mass_append, errors_scal, update_ba_IF_band
+from utils import bcolors, assemble_forms, mass_append, errors_scal, update_geometry
 
 
 # EXACT SOLUTION CLASS
@@ -475,7 +475,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     return V.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us']
 
 
-def moving_diffusion(mesh, dt, order, tfinal, exact, time_order=1, out=False):
+def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=False):
     """
     Solves evolving-surface diffusion equation on a provided mesh. The initial data and RHS needs to be specified in a
     dictionary exact. VTK output can be provided if enabled.
@@ -490,6 +490,8 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, time_order=1, out=False):
             Final time in the simulation.
         exact: Exact
             Exact solution object, see laplace_solvers.py file.
+        band: float
+            Size of the band around levelset, the distance metric is in terms of the levelset function.
         time_order: int
             Order of time discretization (BDF in this case).
         out: bool
@@ -511,7 +513,6 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, time_order=1, out=False):
 
     bdf_coeff = bdf_coeffs[time_order-1]
 
-    c_delta = time_order + 0.1
     # MESH
 
     exact.set_time(0.0)
@@ -523,12 +524,10 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, time_order=1, out=False):
     deformation = lsetmeshadap.CalcDeformation(exact.phi)
 
     lset_approx = GridFunction(H1(mesh, order=1, dirichlet=[]))
-    InterpolateToP1(exact.phi, lset_approx)
-    ci = CutInfo(mesh, lset_approx)
-
-    ba_IF = ci.GetElementsOfType(IF)
+    ba_IF = BitArray(mesh.ne)
     ba_IF_band = BitArray(mesh.ne)
-    update_ba_IF_band(lset_approx, mesh, c_delta * dt * exact.maxvel, ba_IF_band)
+
+    update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
 
     # define projection matrix
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ba_IF, deformation=deformation)
@@ -559,12 +558,7 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, time_order=1, out=False):
         deformation = lsetmeshadap.CalcDeformation(exact.phi)
         t_curr = -j * dt
 
-        InterpolateToP1(exact.phi, lset_approx)
-        ci = CutInfo(mesh, lset_approx)
-
-        ba_IF.Clear()
-        ba_IF |= ci.GetElementsOfType(IF)
-        update_ba_IF_band(lset_approx, mesh, c_delta * dt * exact.maxvel, ba_IF_band)
+        update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
 
         # solve elliptic problem on a fixed surface to get u with normal extension
 
@@ -610,12 +604,7 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, time_order=1, out=False):
         exact.set_time(t_curr + dt)
         with TaskManager():
             deformation = lsetmeshadap.CalcDeformation(exact.phi)
-            InterpolateToP1(exact.phi, lset_approx)
-            ci = CutInfo(mesh, lset_approx)
-
-            ba_IF.Clear()
-            ba_IF |= ci.GetElementsOfType(IF)
-            update_ba_IF_band(lset_approx, mesh, c_delta * dt * exact.maxvel, ba_IF_band)
+            update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
 
             VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
             dofs.append(VG.ndof)
