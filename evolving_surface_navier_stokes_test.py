@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from utils import *
-from moving_surface_ns import Exact, moving_ns, moving_ns_direct
+from stokes_solvers import Exact, moving_ns, moving_ns_direct
 
 SetNumThreads(16)
 
-mode = "advect"
+mode = "advect-nonsol"
 
 if mode in ['advect', 'advect-nonsol']:
     maxvel = 0.2
