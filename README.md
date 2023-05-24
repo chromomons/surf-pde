@@ -55,21 +55,15 @@ My machine:
 Assuming `ngsxfem=2.0.2105` and `ngsolve=6.2.2105` are installed correcly, it should suffice to just clone this repository and run it.
 
 ### Files
-The `.py` files can be grouped into three parts: 
-- _common utility files_: like `utils.py` are used by all other files
-- _solvers_: routines that implement TraceFEM solvers. They are grouped by PDE type and geometry type, i.e. diffusion on an evolving surface or Navier-Stokes on a fixed surface.
-- _testers_: there is a tester file for each solver. It produces EOC, demos, etc.
-
-`input/` folder contains JSON input files for the testers.
-
-`wolfram_mathamatica_notebooks/` folder contains Mathematica scripts that compute symbolic right-hand sides, and other exact quantities. 
-
-More concretely,
+Utility/helper files:
 - `utils.py`: provides utility functions for both solvers and testers.
 - `math2py.py`: converts Wolfram Mathematica symbolic expressions to python expressions.
+
+Solvers:
 - `laplace_solvers.py`: contains fixed-surface Poisson and diffusion, and evolving-surface diffusion solvers.
-- `stokes_solvers.py`: contains fixed-surface steady and unsteady Stokes and unsteady Navier-Stokes solver.
-- `moving_surface_ns.py`: contains evolving-surface Navier-Stokes solvers.
+- `stokes_solvers.py`: contains fixed-surface steady and unsteady Stokes, fixed-surface unsteady Navier-Stokes, and evolving-surface Navier-Stokes solvers.
+
+Testers:
 - `fixed_surface_poisson_test.py`: tests fixed-surface Poisson solver.
 - `fixed_surface_diffusion_test.py`: tests fixed-surface diffusion solver.
 - `fixed_surface_steady_stokes_test.py`: tests steady Stokes solver.
@@ -77,3 +71,7 @@ More concretely,
 - `fixed_surface_navier_stokes_test.py`: tests fixed-surface Navier-Stokes.
 - `evolving_surface_diffusion_test.py`: tests evolving-surface diffusion solver.
 - `evolving_surface_navier_stokes_test.py`: tests evolving-surface Navier-Stokes
+
+`input/` folder contains JSON input files for the testers.
+
+`wolfram_mathamatica_notebooks/` folder contains Mathematica scripts that compute symbolic right-hand sides, and other exact quantities. 
