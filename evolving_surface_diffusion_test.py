@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from math import pi
 
-from ..utils import *
-from ..laplace_solvers import Exact, moving_diffusion
+from utils import *
+from laplace_solvers import Exact, moving_diffusion
 
 SetNumThreads(16)
 

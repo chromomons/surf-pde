@@ -4,8 +4,8 @@ import pandas as pd
 import sys
 from math import pi
 
-from ..utils import *
-from ..laplace_solvers import poisson
+from utils import *
+from laplace_solvers import poisson
 
 SetNumThreads(16)
 

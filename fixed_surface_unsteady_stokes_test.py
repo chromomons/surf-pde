@@ -5,8 +5,8 @@ import scipy.integrate as sci
 import sys
 import matplotlib.pyplot as plt
 
-from ..utils import *
-from ..stokes_solvers import stokes
+from utils import *
+from stokes_solvers import stokes
 
 SetNumThreads(16)
 

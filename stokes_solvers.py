@@ -241,7 +241,7 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
         **exact: Dict
             A dictionary that contains information about the exact solution.
             exact['name']: str
-                Name of the test case, refer to steady_stokes_test.py for more details.
+                Name of the test case, refer to fixed_surface_steady_stokes_test.py for more details.
             exact['phi']: CoefficientFunction
                 The levelset function.
             exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
@@ -382,7 +382,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
             should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
             using OOP.
             exact['name']: str
-                Name of the test case, refer to steady_stokes_test.py for more details.
+                Name of the test case, refer to fixed_surface_steady_stokes_test.py for more details.
             exact['phi']: CoefficientFunction
                 The levelset function.
             exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
@@ -613,7 +613,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
             should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
             using OOP.
             exact['name']: str
-                Name of the test case, refer to steady_stokes_test.py for more details.
+                Name of the test case, refer to fixed_surface_steady_stokes_test.py for more details.
             exact['phi']: CoefficientFunction
                 The levelset function.
             exact['u1'], exact['u2'], exact['u3']: CoefficientFunction

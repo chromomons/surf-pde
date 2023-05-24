@@ -190,7 +190,7 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
         **exact: Dict
             A dictionary that contains information about the exact solution.
             exact['name']: str
-                Name of the test case, refer to poisson_test.py and diffusion_test.py for more details.
+                Name of the test case, refer to fixed_surface_poisson_test.py and fixed_surface_diffusion_test.py for more details.
             exact['phi']: CoefficientFunction
                 The levelset function.
             exact['u']: CoefficientFunction
@@ -306,7 +306,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
             should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
             using OOP.
             exact['name']: str
-                Name of the test case, refer to poisson_test.py and diffusion_test.py for more details.
+                Name of the test case, refer to fixed_surface_poisson_test.py and fixed_surface_diffusion_test.py for more details.
             exact['phi']: CoefficientFunction
                 The levelset function.
             exact['u']: CoefficientFunction

@@ -70,10 +70,10 @@ More concretely,
 - `laplace_solvers.py`: contains fixed-surface Poisson and diffusion, and evolving-surface diffusion solvers.
 - `stokes_solvers.py`: contains fixed-surface steady and unsteady Stokes and unsteady Navier-Stokes solver.
 - `moving_surface_ns.py`: contains evolving-surface Navier-Stokes solvers.
-- `poisson_test.py`: tests fixed-surface Poisson solver.
-- `diffusion_test.py`: tests fixed-surface diffusion solver.
-- `moving_diffusion_test.py`: tests evolving-surface diffusion solver.
-- `steady_stokes_test.py`: tests steady Stokes solver.
-- `unsteady_stokes_test.py`: tests unsteady Stokes solver.
-- `navier_stokes_test.py`: tests fixed-surface Navier-Stokes.
-- `moving_navier_stokes_test.py`: tests evolving-surface Navier-Stokes
+- `fixed_surface_poisson_test.py`: tests fixed-surface Poisson solver.
+- `fixed_surface_diffusion_test.py`: tests fixed-surface diffusion solver.
+- `fixed_surface_steady_stokes_test.py`: tests steady Stokes solver.
+- `fixed_surface_unsteady_stokes_test.py`: tests unsteady Stokes solver.
+- `fixed_surface_navier_stokes_test.py`: tests fixed-surface Navier-Stokes.
+- `evolving_surface_diffusion_test.py`: tests evolving-surface diffusion solver.
+- `evolving_surface_navier_stokes_test.py`: tests evolving-surface Navier-Stokes

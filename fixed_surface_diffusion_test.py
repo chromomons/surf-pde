@@ -7,12 +7,12 @@ import seaborn as sns
 import json
 from math import pi
 
-from ..utils import *
-from ..laplace_solvers import diffusion
+from utils import *
+from laplace_solvers import diffusion
 
 SetNumThreads(16)
 
-f = open('../input/input_diffusion.json')
+f = open('input/input_diffusion.json')
 params = json.load(f)
 
 mode = params['mode']

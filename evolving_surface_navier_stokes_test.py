@@ -4,8 +4,8 @@ import scipy.integrate as sci
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from ..utils import *
-from ..moving_surface_ns import Exact, moving_ns, moving_ns_direct
+from utils import *
+from moving_surface_ns import Exact, moving_ns, moving_ns_direct
 
 SetNumThreads(16)
 

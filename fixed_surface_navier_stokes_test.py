@@ -4,12 +4,12 @@ import pandas as pd
 import scipy.integrate as sci
 import json
 
-from ..utils import *
-from ..stokes_solvers import navier_stokes
+from utils import *
+from stokes_solvers import navier_stokes
 
 SetNumThreads(16)
 
-f = open(f"../input/input_ns.json")
+f = open(f"input/input_ns.json")
 params = json.load(f)
 
 mode = params['mode']

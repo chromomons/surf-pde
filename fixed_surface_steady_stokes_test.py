@@ -3,8 +3,8 @@ import numpy as np
 from ngsolve import SetNumThreads
 import pandas as pd
 
-from ..utils import *
-from ..stokes_solvers import steady_stokes
+from utils import *
+from stokes_solvers import steady_stokes
 
 SetNumThreads(16)
 
