@@ -9,42 +9,53 @@ from math import pi
 
 from utils import *
 from laplace_solvers import diffusion
+from exact import Exact
 
 SetNumThreads(16)
 
-f = open('input/input_diffusion.json')
-params = json.load(f)
+f = open('input/input_fixed_surface_diffusion_test.json')
+args = json.load(f)
 
-mode = params['mode']
-order = params['order']
-stab_type = params['stab_type']
-unif_ref = params['unif_ref']
-max_nref = params['max_nref']
-fname = params['fname']
-plt_out = params['plt_out']
-bad_rhs = params['bad_rhs']
-lamb = params['lamb']
-
-mass_cf = 0.0
+mode = args['mode']
+order = args['order']
+alpha = args['alpha']
+nu = args['nu']
+tfinal = args['tfinal']
+stab_type = args['stab_type']
+unif_ref = args['unif_ref']
+max_nref = args['max_nref']
+fname = args['fname']
+plt_out = args['plt_out']
+bad_rhs = args['bad_rhs']
+lamb = args['lamb']
 
 # EXACT QUANTITIES
 
 if mode == 'circ':
-    exact = {
-        "name": mode,
-        "phi": sqrt(x*x + y*y + z*z) - 1,
-        "u": sin(pi * x) * sin(pi * y * z),
-        "f": pi*(2*y*z*(2*pi*x*cos(pi*x) + 3*sin(pi*x))*cos(pi*y*z) + (2*x*cos(pi*x) + pi*(y**4 + y**2*(x**2 - 2*z**2 + 1) + z**2*(x**2 + z**2 + 1))*sin(pi*x))*sin(pi*y*z))/(x**2 + y**2 + z**2) + mass_cf*sin(pi*x)*sin(pi*y*z)
+    R = 1.0
+    params = {"nu": nu, "alpha": alpha, "R": R}
+    exact = Exact(params)
+    t = exact.t
+    cfs = {
+        "phi": sqrt(x*x + y*y + z*z) - R,
+        "u": (1 + sin(pi * t)) * sin(pi * x) * sin(pi * y * z),
+        "f": pi*(2*nu*x*(2*pi*y*z*cos(pi*y*z) + sin(pi*y*z))*(sin(pi*t) + 1)*cos(pi*x) + (6*nu*y*z*(sin(pi*t) + 1)*cos(pi*y*z) + (alpha*(x**2 + y**2 + z**2)*cos(pi*t) + pi*nu*(sin(pi*t) + 1)*(y**4 + y**2*(x**2 - 2*z**2 + 1) + z**2*(x**2 + z**2 + 1)))*sin(pi*y*z))*sin(pi*x))/(x**2 + y**2 + z**2)
     }
+    exact.set_cfs(cfs)
     bbox_sz = 1.0
 elif mode == 'circ-rough':
-    lamb = params['lamb']
-    exact = {
-        "name": mode,
+    R = 1.0
+    params = {"nu": nu, "alpha": alpha, "params": lamb, "R": R}
+    exact = Exact(params)
+    t = exact.t
+    tfun = 1 + sin(pi * t)
+    cfs = {
         "phi": sqrt(x * x + y * y + z * z) - 1,
-        "u": (sin(acos(z))) ** lamb * sin(atan2(y, x)),
-        "f": (lamb ** 2 + lamb) * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + (1 - lamb ** 2) * (sin(acos(z))) ** (lamb - 2) * sin(atan2(y, x))
+        "u": tfun * (sin(acos(z))) ** lamb * sin(atan2(y, x)),
+        "f": tfun * ((lamb ** 2 + lamb) * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + (1 - lamb ** 2) * (sin(acos(z))) ** (lamb - 2) * sin(atan2(y, x))) + pi*cos(pi*t) * (sin(acos(z))) ** lamb * sin(atan2(y, x)),
+        "fel": alpha * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + nu * ((lamb ** 2 + lamb) * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + (1 - lamb ** 2) * (sin(acos(z))) ** (lamb - 2) * sin(atan2(y, x)))
     }
+    exact.set_cfs(cfs)
     bbox_sz = 1.0
 else:
     print("Invalid mode.")
@@ -60,6 +71,9 @@ h1us = []
 sns.set()
 
 for nref in range(max_nref+1):
+    exact.set_time(0.0)
+    phi = exact.cfs['phi']
+
     h = 2*bbox_sz*2**(-unif_ref-nref)
     if bad_rhs:
         dt = h ** ((lamb + 1) / 2)
@@ -67,11 +81,12 @@ for nref in range(max_nref+1):
         dt = h**((order+1)/2)
 
     if mesh:
-        refine_at_levelset(mesh=mesh, levelset=exact['phi'], nref=1)
+        refine_at_levelset(mesh=mesh, levelset=phi, nref=1)
     else:
         mesh = background_mesh(unif_ref=unif_ref, bbox_sz=bbox_sz)
 
-    ndof, ts, l2uss, h1uss = diffusion(mesh=mesh, dt=dt, order=order, out=False, stab_type=stab_type, bad_rhs=bad_rhs, **exact)
+    ndof, ts, l2uss, h1uss = diffusion(mesh=mesh, dt=dt, exact=exact,
+                                       tfinal=tfinal, order=order, out=False, stab_type=stab_type)
 
     if plt_out:
         plt.plot(l2uss)

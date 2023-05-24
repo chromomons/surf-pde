@@ -1,0 +1,11 @@
+{
+  "mode": "circ",
+  "order": 3,
+  "alpha": 1.0,
+  "nu": 1.0,
+  "unif_ref": 2,
+  "max_nref": 5,
+  "fname": "data",
+  "plt_out": false,
+  "lamb": 0.5
+}

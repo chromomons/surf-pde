@@ -1,0 +1,14 @@
+{
+  "mode": "circ-rough",
+  "order": 1,
+  "alpha": 1.0,
+  "nu": 1.0,
+  "tfinal": 1.0,
+  "stab_type": "total",
+  "unif_ref": 3,
+  "max_nref": 5,
+  "fname": "data",
+  "plt_out": false,
+  "bad_rhs": true,
+  "lamb": 0.5
+}

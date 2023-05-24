@@ -7,87 +7,12 @@ from ngsolve import TaskManager
 import time
 import sys
 import numpy as np
-from math import pi
 from utils import bcolors, assemble_forms, mass_append, errors_scal, update_geometry
-
-
-# EXACT SOLUTION CLASS
-
-class Exact:
-    """
-    A class for exact solution of time-dependent problems. Its usage is motivated by the fact that it can store
-    its own state (time). Might become an interface in later versions.
-    """
-    def __init__(self, nu, R, maxvel):
-        """
-        Default constructor, which initializes time of the object.
-        Args:
-            nu: float
-                Diffusion parameter.
-            R: float
-                Radius of the domain in terms of the distance function phi.
-            maxvel: float
-                Maximum norm of the velocity over space and simulation time.
-        """
-        self.t = Parameter(0.0)
-        self.nu = Parameter(nu)
-        self.R = Parameter(R)
-        self.maxvel = maxvel
-
-        self.phi = None
-        self.w = None
-        self.u = None
-        self.f = None
-        self.g = None
-        self.fel = None
-        self.divGw = None
-        self.divGwT = None
-
-    def set_params(self, phi, w, u, f, fel, divGw, divGwT):
-        """
-        Sets parameters of the exact solution
-        Args:
-            phi: CoefficientFunction
-                Levelset function.
-            w: Vector-valued CoefficientFunction
-                Ambient velocity.
-            u: CoefficientFunction
-                Solution.
-            f: CoefficientFunction
-                RHS of the PDE.
-            fel: CoefficientFunction
-                RHS of the auxiliary problem for normal extension of the initial condition(s).
-            divGw: CoefficientFunction
-                Gamma-divergence of the ambient velocity field (needed for the bilinear form).
-            divGwT: CoefficientFunction
-                Gamma-divergence of the tangential component of the ambient velocity field (needed for the bilinear
-                form).
-        Returns:
-
-        """
-        self.phi = phi
-        self.w = w
-        self.u = u
-        self.f = f
-        self.fel = fel
-        self.divGw = divGw
-        self.divGwT = divGwT
-
-    def set_time(self, tval):
-        """
-        Changes the time of the Exact solution object to tval.
-        Args:
-            tval: float
-                New time of the exact solution object.
-        Returns:
-
-        """
-        self.t.Set(tval)
 
 
 # HELPERS
 
-def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
+def define_forms(eq_type, V, n, Pmat, coef_f, ds, dX, **args):
     """
     Routine that defines bilinear and linear forms for the poisson and the diffusion equation.
     Args:
@@ -125,23 +50,26 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
     if eq_type == 'poisson':
         # penalization parameters
         rho_u = 1.0 / h
-        mass_cf = args['mass_cf']
+        param_alpha = args['param_alpha']
+        param_nu = args['param_nu']
 
         # a_h part
         a = BilinearForm(V, symmetric=True)
-        a += mass_cf * u * v * ds
-        a += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
+        a += param_alpha * u * v * ds
+        a += param_nu * InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
         # normal gradient volume stabilization of the velocity
-        a += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+        a += param_nu * rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
 
         f = LinearForm(V)
-        f += rhsf * v * ds
+        f += coef_f * v * ds
 
         return a, f
     else:
         # penalization parameters
         rho_u = 1.0 / h
-        alpha = args['alpha']
+        param_alpha = args['param_alpha']
+        param_nu = args['param_nu']
+        tr_bdf2_param = args['tr_bdf2_param']
         dt = args['dt']
         stab_type = args['stab_type']
 
@@ -150,31 +78,105 @@ def define_forms(eq_type, V, n, Pmat, rhsf, ds, dX, **args):
         a = BilinearForm(V, symmetric=True)  # mass-total_stab_tests_diffusion
 
         # mass part
-        m += u * v * ds
-        a += 2.0 / (alpha * dt) * u * v * ds
+        m += param_alpha * u * v * ds
+        a += param_alpha * 2.0 / (tr_bdf2_param * dt) * u * v * ds
 
         if stab_type in ['new', 'total']:
             # stabilizing mass part
-            m += h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
-            a += 2.0 / (alpha * dt) * h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+            m += param_alpha * h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+            a += param_alpha * 2.0 / (tr_bdf2_param * dt) * h * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
 
         if stab_type in ['old', 'total']:
-            # stabilizing total_stab_tests_diffusion part
-            d += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
-            a += rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+            # stabilizing diffusion part
+            d += param_nu * rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
+            a += param_nu * rho_u * InnerProduct(grad(u), n) * InnerProduct(grad(v), n) * dX
 
-        # total_stab_tests_diffusion part
-        a += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
-        d += InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
+        # diffusion part
+        a += param_nu * InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
+        d += param_nu * InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
 
         f = LinearForm(V)
-        f += rhsf * v * ds
+        f += coef_f * v * ds
 
         return m, d, a, f
 
 
+def set_ic(mesh, V, gfu_prevs, exact, dt, lsetmeshadap, lset_approx, band, ba_IF, ba_IF_band, n, Pmat, rho_u, ds, dX):
+    """
+    A routine that sets initial condition for BDFk method with normal extension on a narrowband around the surface.
+    Might be unified with analogous routine for evolving-surface NS in the future.
+    Args:
+        mesh: ngsolve.comp.Mesh.Mesh
+            Mesh that contains surface Gamma and is (ideally) refined around it.
+        V: H1
+            Ambient FE space for velocity.
+        exact: Exact
+            Exact solution object, see stokes_solvers.py file.
+        gfu_prevs: List[GridFunction(V)]
+            List of GridFunction's defined on the ambient velocity space. Should contain k grid function for the BDFk
+            method.
+        dt: float
+            Time step size.
+        lsetmeshadap: xfem.lsetcurv.LevelSetMeshAdaption
+            An object used to achieve higher-order approximation of the geometry via deformation.
+        lset_approx: P1 GridFunction on mesh.
+            Variable for P1 approximation of the levelset.
+        band: float
+            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        ba_IF: BitArray
+            Stores element numbers that are intersected by the surface.
+        ba_IF_band: BitArray
+            Stores element numbers that are in the narrowband around the surface.
+        n: Vector-valued GridFunction
+            Discrete normal vector
+        Pmat: Tensor-valued GridFunction
+            Discrete projection matrix
+        rho_u: GridFunction
+            Normal gradient stabilization parameter for u.
+        ds: xfem.dCul
+            Element of area on Gamma.
+        dX: ngsolve.utils.dx
+            Element of bulk volume in the band around surface.
+
+    Returns:
+
+    """
+    time_order = len(gfu_prevs)
+    coef_phi = exact.cfs['phi']
+    coef_fel = exact.cfs['fel']
+    for j in range(time_order):
+        # fix levelset
+        exact.set_time(-j * dt)
+        deformation = lsetmeshadap.CalcDeformation(coef_phi)
+
+        update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
+
+        # solve elliptic problem on a fixed surface to get u with normal extension
+
+        VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
+        gfu_el = GridFunction(VG)
+        u_el, v_el = VG.TnT()
+
+        a_el = BilinearForm(VG, symmetric=True)
+        a_el += (u_el * v_el + InnerProduct(Pmat * grad(u_el), Pmat * grad(v_el))) * ds
+        a_el += rho_u * (n * grad(u_el)) * (n * grad(v_el)) * dX
+
+        f_el = LinearForm(VG)
+        f_el += coef_fel * v_el * ds
+
+        with TaskManager():
+            c_el = Preconditioner(a_el, "bddc")
+            a_el.Assemble()
+            f_el.Assemble()
+
+            solvers.CG(mat=a_el.mat, rhs=f_el.vec, pre=c_el.mat, sol=gfu_el.vec, printrates=False)
+            sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
+
+            gfu_prevs[j].Set(gfu_el)
+
+
 # SOLVERS
-def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
+def poisson(mesh, exact, order=1, out=False):
     """
     Solves Poisson equation (with an added mass term to allow non-mean-zero right-hand-sides) on a provided mesh.
     The initial data and the RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
@@ -183,20 +185,12 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
             Mesh that contains surface Gamma and is (ideally) refined around it.
         mass_cf: float
             Parameter in front of mass term. Set to 1.0 by default.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_poisson.py
         order: int
             Polynomial order for FEM, default 1.
         out: bool
             Flag that indicates if VTK output is to be created.
-        **exact: Dict
-            A dictionary that contains information about the exact solution.
-            exact['name']: str
-                Name of the test case, refer to fixed_surface_poisson_test.py and fixed_surface_diffusion_test.py for more details.
-            exact['phi']: CoefficientFunction
-                The levelset function.
-            exact['u']: CoefficientFunction
-                Solution of the PDE.
-            exact['f']: CoefficientFunction
-                Right-hand-side of the PDE.
 
     Returns:
         V.ndof: int
@@ -213,11 +207,18 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
         precond_name = "local"
         cg_iter = 100000
 
-    phi = CoefficientFunction(exact["phi"]).Compile()
+    # unpack exact
+    param_nu = exact.params['nu']
+    param_alpha = exact.params['alpha']
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_u = CoefficientFunction(exact.cfs["u"]).Compile()
+    coef_f = CoefficientFunction(exact.cfs["f"]).Compile()
+
 
     # LEVELSET ADAPTATION
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(phi)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
     lset_approx = lsetmeshadap.lset_p1
     ci = CutInfo(mesh, lset_approx)
 
@@ -232,17 +233,13 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
     dX = dx(definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
 
-    # unpacking exact solution
-    uSol = CoefficientFunction(exact["u"]).Compile()
-    rhsf = CoefficientFunction(exact["f"]).Compile()
-
     # define projection matrix
     n = Normalize(grad(lset_approx))
     Pmat = Id(3) - OuterProduct(n, n)
 
     # bilinear forms:
-    bilinear_form_args = {'mass_cf': mass_cf}
-    a, f = define_forms(eq_type='poisson', V=V, n=n, Pmat=Pmat, rhsf=rhsf, ds=ds, dX=dX, **bilinear_form_args)
+    bilinear_form_args = {'param_alpha': param_alpha, 'param_nu': param_nu}
+    a, f = define_forms(eq_type='poisson', V=V, n=n, Pmat=Pmat, coef_f=coef_f, ds=ds, dX=dX, **bilinear_form_args)
 
     start = time.perf_counter()
     with TaskManager():
@@ -262,12 +259,12 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     # ERRORS
 
     with TaskManager():
-        l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, uSol)
+        l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, coef_u)
 
     if out:
         with TaskManager():
             vtk = VTKOutput(ma=mesh,
-                            coefs=[lset_approx, deformation, gfu, uSol],
+                            coefs=[lset_approx, deformation, gfu, coef_u],
                             names=["P1-levelset", "deform", "u", "uSol"],
                             filename=f"poisson", subdivision=0)
             vtk.Do()
@@ -275,7 +272,7 @@ def poisson(mesh, mass_cf=1.0, order=1, out=False, **exact):
     return V.ndof, l2u, h1u
 
 
-def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs=False, **exact):
+def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
     """
     Solves diffusion equation on a provided mesh. The initial data and RHS needs to be specified in a dictionary exact.
     VTK output can be provided if enabled.
@@ -284,6 +281,9 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
             Mesh that contains surface Gamma and is (ideally) refined around it.
         dt: float
             Time step size.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_diffusion_test.py
+            If exact.cfs['fel'] is defined, use difference initialization of IC via auxiliary problem.
         tfinal: float
             Final time in the simulation.
         order: int
@@ -298,21 +298,6 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
             The motivation behind the other two stabilizations is that they have better conditioning properties
             when dt -> 0, h fixed. But again, consistency analysis of these two schemes has not been conducted yet
             (as of May 2023).
-        bad_rhs: bool
-            Flag that indicates if we want to run the solver with non-square integrable right-hand-side. This results
-            in a slightly different initialization of the initial condition due to technical problems.
-        **exact: Dict
-            A dictionary that contains information about the exact solution. Note that the CoefficientFunctions
-            should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
-            using OOP.
-            exact['name']: str
-                Name of the test case, refer to fixed_surface_poisson_test.py and fixed_surface_diffusion_test.py for more details.
-            exact['phi']: CoefficientFunction
-                The levelset function.
-            exact['u']: CoefficientFunction
-                Solution of the PDE.
-            exact['f']: CoefficientFunction
-                Right-hand-side of the PDE.
 
     Returns:
         V.ndof: int
@@ -331,11 +316,20 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
         precond_name = "local"
         cg_iter = 100000
 
-    phi = CoefficientFunction(exact["phi"]).Compile()
+    # unpack exact
+    param_alpha = exact.params['alpha']
+    param_nu = exact.params['nu']
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_u = CoefficientFunction(exact.cfs["u"]).Compile()
+    coef_f = CoefficientFunction(exact.cfs["f"]).Compile()
+    coef_fel = None
+    if exact.cfs["fel"]:
+        coef_fel = CoefficientFunction(exact.cfs["fel"]).Compile()
 
     # LEVELSET ADAPTATION
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(phi)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
     lset_approx = lsetmeshadap.lset_p1
 
     ci = CutInfo(mesh, lset_approx)
@@ -344,11 +338,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     Vh = H1(mesh, order=order, dirichlet=[])
     V = Compress(Vh, GetDofsOfElements(Vh, ci.GetElementsOfType(IF)))
 
-    alpha = 2.0 - np.sqrt(2.0)
-
-    t = Parameter(0.0)
-    tfun = 1. + sin(pi*t)
-    tfun_dif = tfun.Diff(t)
+    tr_bdf2_param = 2.0 - np.sqrt(2.0)
 
     # declare grid functions to store the solution
     gfu = GridFunction(V)
@@ -357,16 +347,14 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
     dX = dx(definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
 
-    uSol = CoefficientFunction(tfun*exact["u"]).Compile()
-    rhsf = CoefficientFunction(tfun*exact["f"] + tfun_dif*exact["u"]).Compile()
-
     # define projection matrix
     n = Normalize(grad(lset_approx))
     Pmat = Id(3) - OuterProduct(n, n)
 
     ### bilinear forms:
-    bilinear_form_args = {'alpha': alpha, 'dt': dt, 'stab_type': stab_type}
-    m, d, a, f = define_forms(eq_type='total_stab_tests_diffusion', V=V, n=n, Pmat=Pmat, rhsf=rhsf, ds=ds, dX=dX, **bilinear_form_args)
+    bilinear_form_args = {'param_alpha': param_alpha, 'param_nu': param_nu,
+                          'tr_bdf2_param': tr_bdf2_param, 'dt': dt, 'stab_type': stab_type}
+    m, d, a, f = define_forms(eq_type='total_stab_tests_diffusion', V=V, n=n, Pmat=Pmat, coef_f=coef_f, ds=ds, dX=dX, **bilinear_form_args)
 
     start = time.perf_counter()
     with TaskManager():
@@ -386,13 +374,14 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     t_curr = 0.0  # time counter within one block-run
 
     # IC
-    t.Set(0.0)
+    exact.set_time(0.0)
 
-    if bad_rhs:
+    if coef_fel:
+        # bad RHS
         gfu_el = GridFunction(V)
-        rhsf_el = CoefficientFunction(exact["f"] + exact["u"]).Compile()
-        bilinear_form_args = {'mass_cf': 1.0}
-        a_el, f_el = define_forms(eq_type='poisson', V=V, n=n, Pmat=Pmat, rhsf=rhsf_el, ds=ds, dX=dX, **bilinear_form_args)
+        bilinear_form_args = {'param_alpha': 1.0, "param_nu": 1.0}
+        a_el, f_el = define_forms(eq_type='poisson', V=V, n=n, Pmat=Pmat, coef_f=coef_fel, ds=ds, dX=dX,
+                                  **bilinear_form_args)
         start = time.perf_counter()
         with TaskManager():
             prea_el = Preconditioner(a_el, precond_name)
@@ -400,16 +389,16 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
             solvers.CG(mat=a_el.mat, pre=prea_el.mat, rhs=f_el.vec, sol=gfu_el.vec, maxsteps=cg_iter, initialize=True, tol=1e-12,
                        printrates=False)
         sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
-        gfu.Set(tfun * gfu_el)
+        gfu.Set(gfu_el)
         print(f"{bcolors.OKGREEN}IC computed      ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
     else:
         mesh.SetDeformation(deformation)
-        gfu.Set(uSol)
+        gfu.Set(coef_u)
         mesh.UnsetDeformation()
 
     if out:
         vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, deformation, gfu, uSol],
+                        coefs=[lset_approx, deformation, gfu, coef_u],
                         names=["P1-levelset", "deform", "u", "uSol"],
                         filename=f"./vtk_out/diffusion/{exact['name']}",
                         subdivision=0)
@@ -419,7 +408,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     keys = ['ts', 'l2us', 'h1us']
 
     with TaskManager():
-        l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, uSol)
+        l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, coef_u)
     mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
     start = time.perf_counter()
@@ -427,7 +416,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     fold.data = f.vec
     i = 0
     while t_curr < tfinal - 0.5 * dt:
-        t.Set(t_curr + alpha*dt)
+        exact.set_time(t_curr + tr_bdf2_param*dt)
         with TaskManager():
             f.Assemble()
 
@@ -436,16 +425,16 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
 
         with TaskManager():
             solvers.CG(mat=a.mat, pre=prea.mat, rhs=rhs, sol=diff, initialize=True, maxsteps=cg_iter, tol=1e-12,
-                           printrates=False)
+                       printrates=False)
             gfu.vec.data += diff
         sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
 
         # BDF2
-        t.Set(t_curr + dt)
+        exact.set_time(t_curr + dt)
         with TaskManager():
             f.Assemble()
 
-        rhs.data = f.vec + (1.0-alpha)/(alpha*dt)* m.mat * diff - d.mat * gfu.vec
+        rhs.data = f.vec + (1.0-tr_bdf2_param)/(tr_bdf2_param*dt) * m.mat * diff - d.mat * gfu.vec
 
         with TaskManager():
             solvers.CG(mat=a.mat, pre=prea.mat, rhs=rhs, sol=diff, initialize=True, maxsteps=cg_iter, tol=1e-12,
@@ -460,7 +449,7 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
         print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
-            l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, uSol)
+            l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, coef_u)
         mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
         if out:
@@ -475,10 +464,10 @@ def diffusion(mesh, dt, tfinal=1.0, order=1, out=False, stab_type='old', bad_rhs
     return V.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us']
 
 
-def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=False):
+def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=False, stab_type='old'):
     """
     Solves evolving-surface diffusion equation on a provided mesh. The initial data and RHS needs to be specified in a
-    dictionary exact. VTK output can be provided if enabled.
+    object exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
@@ -488,14 +477,22 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
             Polynomial order for FEM, default 1.
         tfinal: float
             Final time in the simulation.
-        exact: Exact
-            Exact solution object, see laplace_solvers.py file.
+        exact: exact.Exact
+            Exact solution object, see exact.py and evolving_surface_diffusion.py
         band: float
             Size of the band around levelset, the distance metric is in terms of the levelset function.
         time_order: int
             Order of time discretization (BDF in this case).
         out: bool
             Flag that indicates if VTK output is to be created.
+        stab_type: str
+            Type of stabilization. The standard one is what we call here 'old', i.e. normal gradient in the bulk.
+            We also offer two other (more experimental) types of stabilizations:
+                - 'new': where we stabilize the mass term instead of the diffusion term with a scaling factor h.
+                - 'total': where we apply both 'old' and 'new' stabilizations.
+            The motivation behind the other two stabilizations is that they have better conditioning properties
+            when dt -> 0, h fixed. But again, consistency analysis of these two schemes has not been conducted yet
+            (as of May 2023).
 
     Returns:
         np.mean(dofs): float
@@ -513,7 +510,15 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
 
     bdf_coeff = bdf_coeffs[time_order-1]
 
-    # MESH
+    # unpack exact
+    param_nu = exact.params['nu']
+
+    coef_phi = exact.cfs['phi']
+    coef_w = exact.cfs['w']
+    coef_u = exact.cfs['u']
+    coef_f = exact.cfs['f']
+    coef_divGw = exact.cfs['divGw']
+    coef_divGwT = exact.cfs['divGwT']
 
     exact.set_time(0.0)
 
@@ -521,13 +526,13 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
 
     # LEVELSET ADAPTATION
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(exact.phi)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
 
     lset_approx = GridFunction(H1(mesh, order=1, dirichlet=[]))
     ba_IF = BitArray(mesh.ne)
     ba_IF_band = BitArray(mesh.ne)
 
-    update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+    update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
 
     # define projection matrix
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ba_IF, deformation=deformation)
@@ -536,14 +541,15 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
     n = Normalize(grad(lset_approx))
     Pmat = Id(3) - OuterProduct(n, n)
     h = specialcf.mesh_size
-    rho = 1./h
+    rho_u = 1./h
+    rho_u_new = h
 
     gfu_prevs = [GridFunction(V, name=f"gru-{i}") for i in range(time_order)]
 
     if out:
         gfu_out = GridFunction(V)
         vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, gfu_out, exact.u],
+                        coefs=[lset_approx, gfu_out, coef_u],
                         names=["P1-levelset", "u", "uSol"],
                         filename=f"./vtk_out/diffusion/moving-diff-new",
                         subdivision=0)
@@ -552,74 +558,46 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
     out_errs = {'ts': [], 'l2us': [], 'h1us': []}
 
     # IC
-    for j in range(time_order):
-        # fix levelset
-        exact.set_time(-j*dt)
-        deformation = lsetmeshadap.CalcDeformation(exact.phi)
-        t_curr = -j * dt
-
-        update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
-
-        # solve elliptic problem on a fixed surface to get u with normal extension
-
-        VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
-        gfu_el = GridFunction(VG)
-        u_el, v_el = VG.TnT()
-
-        a_el = BilinearForm(VG, symmetric=True)
-        a_el += (u_el*v_el + InnerProduct(Pmat * grad(u_el), Pmat * grad(v_el))) * ds
-        a_el += 1./h * (n * grad(u_el)) * (n * grad(v_el)) * dX
-
-        f_el = LinearForm(VG)
-        f_el += exact.fel * v_el * ds
-
-        with TaskManager():
-            c_el = Preconditioner(a_el, "bddc")
-            a_el.Assemble()
-            f_el.Assemble()
-
-            solvers.CG(mat=a_el.mat, rhs=f_el.vec, pre=c_el.mat, sol=gfu_el.vec, printrates=False)
-            sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
-
-            gfu_prevs[j].Set(gfu_el)
-
-        if out:
-            gfu_out.Set(gfu_prevs[j])
-            vtk.Do(time=t_curr)
-
-        with TaskManager():
-            l2u, h1u = errors_scal(mesh, ds, Pmat, gfu_prevs[j], exact.u)
-        mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
+    set_ic(
+        mesh=mesh, V=V, gfu_prevs=gfu_prevs, exact=exact, dt=dt, lsetmeshadap=lsetmeshadap, lset_approx=lset_approx,
+        band=band, ba_IF=ba_IF, ba_IF_band=ba_IF_band, n=n, Pmat=Pmat, rho_u=rho_u, ds=ds, dX=dX
+    )
 
     # TIME MARCHING
-
     dofs = []
 
     exact.set_time(0.0)
     t_curr = 0.0
+
+    if out:
+        gfu_out.Set(gfu_prevs[0])
+        vtk.Do(time=t_curr)
 
     i = 1
 
     while t_curr < tfinal + dt/2:
         exact.set_time(t_curr + dt)
         with TaskManager():
-            deformation = lsetmeshadap.CalcDeformation(exact.phi)
-            update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+            deformation = lsetmeshadap.CalcDeformation(coef_phi)
+            update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
 
             VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
             dofs.append(VG.ndof)
             u, v = VG.TnT()
 
         a = BilinearForm(VG)
-        a += (bdf_coeff[0] * u * v +
-                     dt * (1. / 2 * InnerProduct(Pmat * exact.w, Pmat * grad(u)) * v -
-                           1. / 2 * InnerProduct(Pmat * exact.w, Pmat * grad(v)) * u +
-                           (exact.divGw - 0.5 * exact.divGwT) * u * v +
-                           exact.nu * InnerProduct(Pmat * grad(u), Pmat * grad(v)))) * ds
-        a += (dt * rho * (n * grad(u)) * (n * grad(v))) * dX
+        a += bdf_coeff[0] * u * v * ds
+        a += dt * (1. / 2 * InnerProduct(Pmat * coef_w, Pmat * grad(u)) * v -
+                   1. / 2 * InnerProduct(Pmat * coef_w, Pmat * grad(v)) * u +
+                   (coef_divGw - 0.5 * coef_divGwT) * u * v) * ds
+        a += dt * param_nu * InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
+        if stab_type in ['old', 'total']:
+            a += dt * rho_u * (n * grad(u)) * (n * grad(v)) * dX
+        if stab_type in ['new', 'total']:
+            a += bdf_coeff[0] * rho_u_new * (n * grad(u)) * (n * grad(v)) * dX
 
         f = LinearForm(VG)
-        f += (dt * exact.f - sum([bdf_coeff[j+1] * gfu_prevs[j] for j in range(time_order)])) * v * ds
+        f += (dt * coef_f - sum([bdf_coeff[j+1] * gfu_prevs[j] for j in range(time_order)])) * v * ds
 
         with TaskManager():
             c = Preconditioner(a, "bddc")
@@ -643,10 +621,10 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         t_curr += dt
 
         with TaskManager():
-            l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, exact.u)
+            l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, coef_u)
         mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
         i += 1
-    print("")
+    print("\r", "                                                                             ")
 
     return np.mean(dofs), out_errs['ts'], out_errs['l2us'], out_errs['h1us']
