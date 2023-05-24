@@ -1,5 +1,3 @@
-from stokes_solvers import *
-from utils import *
 from ngsolve import SetNumThreads
 import pandas as pd
 import numpy as np
@@ -7,6 +5,8 @@ import scipy.integrate as sci
 import sys
 import matplotlib.pyplot as plt
 
+from ..utils import *
+from ..stokes_solvers import stokes
 
 SetNumThreads(16)
 

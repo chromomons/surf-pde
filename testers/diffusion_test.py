@@ -1,5 +1,3 @@
-from laplace_solvers import *
-from utils import *
 from ngsolve import SetNumThreads
 import pandas as pd
 import numpy as np
@@ -7,10 +5,14 @@ import scipy.integrate as sci
 import matplotlib.pyplot as plt
 import seaborn as sns
 import json
+from math import pi
+
+from ..utils import *
+from ..laplace_solvers import diffusion
 
 SetNumThreads(16)
 
-f = open('input/input_diffusion.json')
+f = open('../input/input_diffusion.json')
 params = json.load(f)
 
 mode = params['mode']

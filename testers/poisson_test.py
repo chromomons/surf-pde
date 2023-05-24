@@ -1,12 +1,11 @@
-import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning)
-from laplace_solvers import *
 import numpy as np
-from utils import *
 from ngsolve import SetNumThreads
 import pandas as pd
 import sys
 from math import pi
+
+from ..utils import *
+from ..laplace_solvers import poisson
 
 SetNumThreads(16)
 

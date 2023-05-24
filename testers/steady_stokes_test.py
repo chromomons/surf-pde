@@ -1,9 +1,10 @@
 import sys
-from stokes_solvers import *
 import numpy as np
-from utils import *
 from ngsolve import SetNumThreads
 import pandas as pd
+
+from ..utils import *
+from ..stokes_solvers import steady_stokes
 
 SetNumThreads(16)
 
