@@ -1,4 +1,5 @@
-output/csv_out/
-output/plt_out/
-output/txt_out/
-output/vtk_out/
+output/csv_out/*
+output/plt_out/*
+output/txt_out/*
+output/vtk_out/*
+__pycache__/
