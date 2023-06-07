@@ -1,14 +1,39 @@
 {
-  "mode": "circ-rough",
-  "order": 1,
-  "alpha": 1.0,
-  "nu": 1.0,
-  "tfinal": 1.0,
-  "stab_type": "total",
-  "unif_ref": 3,
-  "max_nref": 5,
-  "fname": "data",
-  "plt_out": false,
-  "bad_rhs": true,
-  "lamb": 0.5
+  "name": "brandner_circ",
+  "num_threads": 16,
+  "path_to_math_json": "./wolfram_mathematica_notebooks/json_output/fixed_surface_diffusion_mathematica.json",
+  "orders": {
+    "space_order": 2,
+    "time_order": null
+  },
+  "pde_params": {
+    "alpha": 1.0,
+    "nu": 1.0
+  },
+  "soln_params": {
+    "lamb": 0.5
+  },
+  "lset_params": {
+    "R": 1.0
+  },
+  "meshing_params": {
+    "bbox_sz": 1.0,
+    "unif_ref": 2,
+    "max_nref": 5
+  },
+  "solver_params": {
+    "tfinal": 1.0,
+    "stab_type": "total"
+  },
+  "out_params": {
+    "txt_out": false,
+    "vtk_out": false,
+    "csv_out": false,
+    "solver_logs": false,
+    "print_sparse_solver_rates": false
+  },
+  "linear_solver_params": {
+    "bddc_cg_iter": 10,
+    "jacobi_cg_iter": 100000
+  }
 }

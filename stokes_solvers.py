@@ -6,88 +6,17 @@ from xfem.lsetcurv import *
 from ngsolve import solvers
 from ngsolve import TaskManager
 import time
-from math import pi
 import numpy as np
 from utils import bcolors, assemble_forms, get_dom_measure, renormalize, mass_append, errors_scal, \
     errors_vec, helper_grid_functions, update_geometry
 
 
 # EXACT SOLUTION CLASS
-
-class Exact:
-    """
-    A class for exact solution of evolving-surface tangential Navier-Stokes. Its usage is motivated by the fact that
-    it can store its own state (time). Might become an interface in later versions.
-    """
-    def __init__(self, mu, R, maxvel):
-        """
-        Default constructor that initializes time of the object.
-        Args:
-            mu: float
-                Kinematic viscocity parameter.
-            R: float
-                Radius of the domain in terms of the distance function phi.
-            maxvel: float
-                Maximum norm of the velocity over space and simulation time.
-        """
-        self.t = Parameter(0.0)
-        self.mu = Parameter(mu)
-        self.R = Parameter(R)
-        self.maxvel = maxvel
-
-        self.phi = None
-        self.wN = None
-        self.u = None
-        self.f = None
-        self.g = None
-        self.fel = None
-
-    def set_params(self, phi, wN, u, p, f, fel, g):
-        """
-        Sets parameters of the exact solution
-        Args:
-            phi: CoefficientFunction
-                Levelset function.
-            wN: CoefficientFunction
-                Normal component of the ambient velocity.
-            u: Vector-valued CoefficientFunction
-                Velocity.
-            p: CoefficientFunction
-                Pressure.
-            f: Vector-valued CoefficientFunction
-                RHS of the momentum equation.
-            fel: Vector-valued CoefficientFunction
-                RHS of the auxiliary problem for normal extension of the initial condition(s).
-            g: CoefficientFunction
-                RHS of the continuity equation.
-        Returns:
-
-        """
-        self.phi = phi
-        self.wN = wN
-        self.u = u
-        self.p = p
-        self.f = f
-        self.fel = fel
-        self.g = g
-
-    def set_time(self, tval):
-        """
-        Changes the time of the Exact solution object to tval.
-        Args:
-            tval: float
-                New time of the exact solution object.
-        Returns:
-
-        """
-        self.t.Set(tval)
-
-
 # HELPERS
 
 def set_ic(mesh, V, order, gfu_prevs, exact, dt,
            lsetmeshadap, lset_approx, band, ba_IF, ba_IF_band,
-           n, Pmat, rho_u, tau, ds, dX):
+           n, Pmat, rho_u, tau, ds, dX, precond_name, cg_iter):
     """
     A routine that sets initial condition for BDFk method with normal extension on a narrowband around the surface.
     Args:
@@ -126,23 +55,30 @@ def set_ic(mesh, V, order, gfu_prevs, exact, dt,
             Element of area on Gamma.
         dX: ngsolve.utils.dx
             Element of bulk volume in the band around surface.
+        precond_name: str
+            Name of the preconditioner, either "bddc" or "local" (Jacobi)
+        cg_iter: int
+            Number of CG iterations.
 
     Returns:
 
     """
     time_order = len(gfu_prevs)
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_fel = CoefficientFunction((exact.cfs["fel1"], exact.cfs["fel2"], exact.cfs["fel3"])).Compile()
     for j in range(time_order):
         # fix levelset
         exact.set_time(-j * dt)
 
-        deformation = lsetmeshadap.CalcDeformation(exact.phi)
+        deformation = lsetmeshadap.CalcDeformation(coef_phi)
 
         # solve elliptic problem on a fixed surface to get u with normal extension
-        update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+        update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
         VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
 
         # helper grid functions
-        n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=exact.phi, vel_space=V)
+        n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=coef_phi, vel_space=V)
 
         gfu_el = GridFunction(VG)
 
@@ -150,21 +86,21 @@ def set_ic(mesh, V, order, gfu_prevs, exact, dt,
 
         a_el = BilinearForm(VG, symmetric=True)
         a_el += InnerProduct(Pmat * u_el, Pmat * v_el) * ds
-        a_el += 2 * exact.mu * (InnerProduct(Pmat * Sym(grad(u_el)) * Pmat - (u_el * n) * Hmat,
-                                             Pmat * Sym(grad(v_el)) * Pmat - (v_el * n) * Hmat)) * ds
+        a_el += (InnerProduct(Pmat * Sym(grad(u_el)) * Pmat - (u_el * n) * Hmat,
+                              Pmat * Sym(grad(v_el)) * Pmat - (v_el * n) * Hmat)) * ds
         a_el += (tau * ((u_el * n_k) * (v_el * n_k))) * ds
         a_el += (rho_u * InnerProduct(grad(u_el) * n, grad(v_el) * n)) * dX
 
         f_el = LinearForm(VG)
-        f_el += InnerProduct(exact.fel, Pmat * v_el) * ds
+        f_el += InnerProduct(coef_fel, Pmat * v_el) * ds
 
         with TaskManager():
-            pre_a_el = Preconditioner(a_el, "bddc")
+            pre_a_el = Preconditioner(a_el, precond_name)
 
             a_el.Assemble()
             f_el.Assemble()
 
-            solvers.CG(mat=a_el.mat, rhs=f_el.vec, pre=pre_a_el.mat, sol=gfu_el.vec, printrates=False)
+            solvers.CG(mat=a_el.mat, rhs=f_el.vec, pre=pre_a_el.mat, sol=gfu_el.vec, printrates=False, maxsteps=cg_iter)
             sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
 
             gfu_prevs[j].Set(gfu_el)
@@ -176,7 +112,8 @@ def define_forms_moving_ns(
         n, Pmat, n_k, Hmat,
         tau, rho_u, rho_p,
         ds, dX, dX2,
-        exact, gfu_approx, gfu_prevs,
+        param_rho, param_mu, coef_wN, coef_f, coef_g,
+        gfu_approx, gfu_prevs,
         solver='gmres', XG=None):
     """
     Routine that defines bilinear and linear forms for the evolving-surface Navier-Stokes for GMRes and direct solvers.
@@ -209,8 +146,12 @@ def define_forms_moving_ns(
             Element of bulk volume in the band around surface.
         dX2: ngsolve.utils.dx
             Element of bulk volume elements cut by surface.
-        exact: Exact
-            Exact solution object, see stokes_solvers.py file.
+        coef_wN: CoefficientFunction
+            Normal component of the ambient velocity field (scalar quantity).
+        coef_f: Vector-valued CoefficientFunction
+            Right-hand side of the momentum equation.
+        coef_g: CoefficientFunction
+            Right-hand side of the continuity equation.
         gfu_approx: Vector-valued GridFunction
             Extrapolation of u at t=t_{n+1} for linearization of the convection term in Navier-Stokes
         gfu_prevs: List[GridFunction(V)]
@@ -231,34 +172,34 @@ def define_forms_moving_ns(
         p, q = QG.TnT()
 
         a = BilinearForm(VG, symmetric=False)
-        a += bdf_coeff[0] / dt * InnerProduct(u, Pmat * v) * ds
-        a += exact.wN * InnerProduct(Hmat * u, Pmat * v) * ds
-        a += 0.5 * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * gfu_approx, v) * ds
-        a += (-0.5) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * gfu_approx, u) * ds
-        a += (-0.5) * InnerProduct(exact.g * u, Pmat * v) * ds
-        a += 2.0 * exact.mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
+        a += param_rho * bdf_coeff[0] / dt * InnerProduct(u, Pmat * v) * ds
+        a += param_rho * coef_wN * InnerProduct(Hmat * u, Pmat * v) * ds
+        a += param_rho * 0.5 * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * gfu_approx, v) * ds
+        a += param_rho * (-0.5) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * gfu_approx, u) * ds
+        a += param_rho * (-0.5) * InnerProduct(coef_g * u, Pmat * v) * ds
+        a += 2.0 * param_mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
                                             Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
-        a += tau * InnerProduct(n_k, u) * InnerProduct(n_k, v) * ds
-        a += rho_u * InnerProduct(grad(u) * n, grad(v) * n) * dX
+        a += param_rho * tau * InnerProduct(n_k, u) * InnerProduct(n_k, v) * ds
+        a += 2.0 * param_mu * rho_u * InnerProduct(grad(u) * n, grad(v) * n) * dX
 
         # pressure mass-convection-diffusion matrix
         ap = BilinearForm(QG, symmetric=False)
         # mass part
-        ap += bdf_coeff[0] / dt * p * q * ds
-        # total_stab_tests_diffusion
-        ap += 2 * exact.mu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
+        ap += param_rho * bdf_coeff[0] / dt * p * q * ds
         # convection
-        ap += InnerProduct(Pmat * grad(p), Pmat * gfu_approx) * q * ds
+        ap += param_rho * InnerProduct(Pmat * grad(p), Pmat * gfu_approx) * q * ds
+        # diffusion part
+        ap += 2 * param_mu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
         # SHOULD IT BE rho_p OR rho_u?
-        ap += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX2
+        ap += 2 * param_mu * rho_p * ((grad(p) * n) * (grad(q) * n)) * dX2
 
         # pressure diffusion matrix
         pd = BilinearForm(QG, symmetric=True)
         # diffusion
-        pd += InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
+        pd += 2 * param_mu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
-        pd += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX2
+        pd += 2 * param_mu * rho_p * ((grad(p) * n) * (grad(q) * n)) * dX2
 
         # stabilized pressure mass matrix
         sq = BilinearForm(QG, symmetric=True)
@@ -272,12 +213,12 @@ def define_forms_moving_ns(
         c += rho_p * (grad(p) * n) * (grad(q) * n) * dX2
 
         f = LinearForm(VG)
-        f += InnerProduct(exact.f, Pmat * v) * ds
+        f += InnerProduct(coef_f, Pmat * v) * ds
         for j in range(time_order):
             f += (-1.0) * bdf_coeff[j + 1] / dt * InnerProduct(gfu_prevs[j], Pmat * v) * ds
 
         g = LinearForm(QG)
-        g += (-1.0) * exact.g * q * ds
+        g += (-1.0) * coef_g * q * ds
 
         return a, ap, pd, sq, b, c, f, g
     else:
@@ -285,15 +226,15 @@ def define_forms_moving_ns(
         v, q = XG.TestFunction()
 
         a = BilinearForm(XG, symmetric=False)
-        a += bdf_coeff[0] / dt * InnerProduct(u, Pmat * v) * ds
-        a += exact.wN * InnerProduct(Hmat * u, Pmat * v) * ds
-        a += 0.5 * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * gfu_approx, v) * ds
-        a += (-0.5) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * gfu_approx, u) * ds
-        a += (-0.5) * InnerProduct(exact.g * u, Pmat * v) * ds
-        a += 2.0 * exact.mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
-                                      Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
-        a += tau * InnerProduct(n_k, u) * InnerProduct(n_k, v) * ds
-        a += rho_u * InnerProduct(grad(u) * n, grad(v) * n) * dX
+        a += param_rho * bdf_coeff[0] / dt * InnerProduct(u, Pmat * v) * ds
+        a += param_rho * coef_wN * InnerProduct(Hmat * u, Pmat * v) * ds
+        a += param_rho * 0.5 * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * gfu_approx, v) * ds
+        a += param_rho * (-0.5) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * gfu_approx, u) * ds
+        a += param_rho * (-0.5) * InnerProduct(coef_g * u, Pmat * v) * ds
+        a += 2.0 * param_mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
+                                            Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
+        a += param_rho * tau * InnerProduct(n_k, u) * InnerProduct(n_k, v) * ds
+        a += 2.0 * param_mu * rho_u * InnerProduct(grad(u) * n, grad(v) * n) * dX
 
         a += InnerProduct(u, Pmat * grad(q)) * ds
         a += InnerProduct(v, Pmat * grad(p)) * ds
@@ -301,15 +242,15 @@ def define_forms_moving_ns(
         a += (-1.0) * rho_p * (grad(p) * n) * (grad(q) * n) * dX2
 
         f = LinearForm(XG)
-        f += InnerProduct(exact.f, Pmat * v) * ds
+        f += InnerProduct(coef_f, Pmat * v) * ds
         for j in range(time_order):
             f += (-1.0) * bdf_coeff[j + 1] / dt * InnerProduct(gfu_prevs[j], Pmat * v) * ds
-        f += (-1.0) * exact.g * q * ds
+        f += (-1.0) * coef_g * q * ds
 
         return a, f
 
 
-def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
+def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, coef_f, coef_g, ds, dX, **args):
     """
     Routine that defines bilinear and linear forms for the steady and unsteady Stokes, and unsteady Navier-Stokes.
     Args:
@@ -327,9 +268,9 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
             Discrete shape operator
         n_k: Vector-valued GridFunction
             Higher-order approximation of the normal vector
-        rhsf: Vector-valued CoefficientFunction
+        coef_f: Vector-valued CoefficientFunction
             Right-hand side of the momentum equation
-        rhsg: CoefficientFunction
+        coef_g: CoefficientFunction
             Right-hand side of the continuity equation
         ds: xfem.dCul
             Element of area on Gamma
@@ -362,17 +303,18 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         tau = 1.0 / (h * h)
         rho_u = 1.0 / h
         rho_p = 1.0 * h
-        alpha = args['alpha']
+        param_alpha = args['param_alpha']
+        param_mu = args['param_mu']
 
         # A_h part
         a = BilinearForm(V, symmetric=True)
-        a += (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
-                           Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
-        a += alpha * (InnerProduct(Pmat * u, Pmat * v)) * ds
+        a += param_alpha * (InnerProduct(Pmat * u, Pmat * v)) * ds
+        a += 2 * param_mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
+                                          Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
         # penalization of the normal component of the velocity
-        a += (tau * ((u * n_k) * (v * n_k))) * ds
+        a += param_alpha * (tau * ((u * n_k) * (v * n_k))) * ds
         # normal gradient volume stabilization of the velocity
-        a += (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
+        a += 2 * param_mu * (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
 
         # b_T part
         b = BilinearForm(trialspace=V, testspace=Q)
@@ -388,9 +330,9 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         sq += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
 
         f = LinearForm(V)
-        f += rhsf * v * ds
+        f += InnerProduct(coef_f, Pmat * v) * ds
         g = LinearForm(Q)
-        g += (-1.0) * rhsg * q * ds
+        g += (-1.0) * coef_g * q * ds
 
         return a, b, c, sq, f, g
     elif eq_type == 'stokes':
@@ -399,30 +341,32 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         rho_u = 1.0 / h
         rho_p = 1.0 * h
 
+        param_rho = args['param_rho']
+        param_mu = args['param_mu']
         alpha = args['alpha']
         dt = args['dt']
 
         # Mass matrix
         m = BilinearForm(V, symmetric=True)
-        m += InnerProduct(Pmat * u, Pmat * v) * ds
+        m += param_rho * InnerProduct(Pmat * u, Pmat * v) * ds
 
         # A_h part
         a = BilinearForm(V, symmetric=True)
-        a += 2.0 / (alpha * dt) * InnerProduct(u, Pmat * v) * ds
+        a += param_rho * 2.0 / (alpha * dt) * InnerProduct(Pmat * u, Pmat * v) * ds
 
-        a += (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
-                           Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
+        a += 2 * param_mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
+                                          Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
         # penalization of the normal component of the velocity
-        a += (tau * ((u * n_k) * (v * n_k))) * ds
-        a += (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
+        a += param_rho * (tau * ((u * n_k) * (v * n_k))) * ds
+        a += 2 * param_mu * (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
 
         a2 = BilinearForm(V, symmetric=True)
-        a2 += (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
-                            Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
+        a2 += 2 * param_mu * (InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat,
+                                           Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
         # penalization of the normal component of the velocity
-        a2 += (tau * ((u * n_k) * (v * n_k))) * ds
+        a2 += param_rho * (tau * ((u * n_k) * (v * n_k))) * ds
         # normal gradient volume stabilization of the velocity
-        a2 += (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
+        a2 += 2 * param_mu * (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
 
         # b_T part
         b = BilinearForm(trialspace=V, testspace=Q)
@@ -444,9 +388,9 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         zeroq += 0.0 * p * q * ds
 
         f = LinearForm(V)
-        f += rhsf * (Pmat * v) * ds
+        f += coef_f * (Pmat * v) * ds
         g = LinearForm(Q)
-        g += (-1.0) * rhsg * q * ds
+        g += (-1.0) * coef_g * q * ds
 
         return m, a, a2, b, c, sq, zerou, zeroq, f, g
     else:
@@ -455,9 +399,10 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         rho_u = 1.0 / h
         rho_p = 1.0 * h
 
-        nu = args['nu']
+        param_rho = args['param_rho']
+        param_mu = args['param_mu']
         dt = args['dt']
-        dtparam = args['dtparam']
+        bdf_coeff = args['bdf_coeff']
         gfu_approx = args['gfu_approx']
 
         # velocity mass matrix
@@ -466,37 +411,37 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
 
         a = BilinearForm(V, symmetric=False)
         # mass part
-        a += dtparam / dt * InnerProduct(Pmat * u, Pmat * v) * ds
+        a += param_rho * bdf_coeff / dt * InnerProduct(Pmat * u, Pmat * v) * ds
         # diffusion part
-        a += nu * (
+        a += 2 * param_mu * (
             InnerProduct(Pmat * Sym(grad(u)) * Pmat - (u * n) * Hmat, Pmat * Sym(grad(v)) * Pmat - (v * n) * Hmat)) * ds
         # convection part, skew-symmetrized
         # a += InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * (Pmat * gfu_approx), Pmat * v) * ds
-        a += 0.5 * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * (Pmat * gfu_approx), Pmat * v) * ds
-        a += (-0.5) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * (Pmat * gfu_approx), Pmat * u) * ds
-        a += (-0.5) * rhsg * InnerProduct(Pmat * u, Pmat * v) * ds
+        a += 0.5 * param_rho * InnerProduct((Pmat * grad(u) * Pmat - (u * n) * Hmat) * (Pmat * gfu_approx), Pmat * v) * ds
+        a += (-0.5 * param_rho) * InnerProduct((Pmat * grad(v) * Pmat - (v * n) * Hmat) * (Pmat * gfu_approx), Pmat * u) * ds
+        a += (-0.5 * param_rho) * coef_g * InnerProduct(Pmat * u, Pmat * v) * ds
         # penalization of the normal component of the velocity
-        a += tau * ((u * n_k) * (v * n_k)) * ds
+        a += param_rho * tau * ((u * n_k) * (v * n_k)) * ds
         # normal gradient in the bulk stabilization
-        a += (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
+        a += 2 * param_mu * (rho_u * InnerProduct(grad(u) * n, grad(v) * n)) * dX
 
         # pressure mass-convection-diffusion matrix
         ap = BilinearForm(Q, symmetric=False)
         # mass part
-        ap += dtparam / dt * p * q * ds
-        # diffusion part
-        ap += nu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
+        ap += param_rho * bdf_coeff / dt * p * q * ds
         # convection
-        ap += InnerProduct(Pmat * grad(p), Pmat * gfu_approx) * q * ds
+        ap += param_rho * InnerProduct(Pmat * grad(p), Pmat * gfu_approx) * q * ds
+        # diffusion part
+        ap += 2 * param_mu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
-        ap += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
+        ap += 2 * param_mu * rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
 
         # pressure diffusion matrix
         pd = BilinearForm(Q, symmetric=True)
         # total_stab_tests_diffusion
-        pd += InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
+        pd += 2 * param_mu * InnerProduct(Pmat * grad(p), Pmat * grad(q)) * ds
         # normal gradient in the bulk stabilization
-        pd += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
+        pd += 2 * param_mu * rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
 
         # discrete divergence operator
         b = BilinearForm(trialspace=V, testspace=Q)
@@ -512,15 +457,15 @@ def define_forms(eq_type, V, Q, n, Pmat, Hmat, n_k, rhsf, rhsg, ds, dX, **args):
         sq += rho_p * ((grad(p) * n) * (grad(q) * n)) * dX
 
         f = LinearForm(V)
-        f += InnerProduct(rhsf, Pmat * v) * ds
+        f += InnerProduct(coef_f, Pmat * v) * ds
         g = LinearForm(Q)
-        g += (-1.0) * rhsg * q * ds
+        g += (-1.0) * coef_g * q * ds
 
         return m, a, ap, pd, b, c, sq, f, g
 
 
 # SOLVERS
-def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
+def steady_stokes(mesh, exact, order, linear_solver_params, vtk_out=None, logs=True, printrates=False):
     """
     Solves Steady Stokes problem (with an added mass term to allow non-mean-zero right-hand-sides) on a provided mesh
     using P_k-P_{k-1} Taylor-Hood pair. The initial data and RHS needs to be specified in a dictionary exact. VTK output
@@ -529,26 +474,18 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
-        alpha: float
-            Parameter in front of mass term. Set to 1.0 by default.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_poisson.py
         order: int
-            Polynomial order for velocity, default 2.
-        out: bool
-            Flag that indicates if VTK output is to be created.
-        **exact: Dict
-            A dictionary that contains information about the exact solution.
-            exact['name']: str
-                Name of the test case, refer to fixed_surface_steady_stokes_test.py for more details.
-            exact['phi']: CoefficientFunction
-                The levelset function.
-            exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
-                Each of the three components of the velocity solution of the PDE.
-            exact['p']: CoefficientFunction
-                Pressure solution of the PDE.
-            exact['f1'], exact['f2'], exact['f3']: CoefficientFunction
-                Each of the three components of the right-hand-side of the momentum equation.
-            exact['g']: CoefficientFunction
-                Right-hand-side of the continuity equation.
+            Polynomial order for FEM for velocity.
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
+        printrates: bool
+            Flag that indicates if linear solver residuals are to be printed.
 
     Returns:
         V.ndof + Q.ndof: int
@@ -562,15 +499,31 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
         h1p: float
             H^1-error of the pressure over Gamma
     """
-    phi = CoefficientFunction(exact["phi"]).Compile()
+    if order < 3:
+        precond_name = "bddc"
+        cg_iter = linear_solver_params['bddc_cg_iter']
+    else:
+        precond_name = "local"
+        cg_iter = linear_solver_params['jacobi_cg_iter']
+    minres_iter = linear_solver_params['minres_iter']
+
+    # unpack exact
+    param_mu = exact.params['mu']
+    param_alpha = exact.params['alpha']
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_u = CoefficientFunction((exact.cfs["u1"], exact.cfs["u2"], exact.cfs["u3"])).Compile()
+    coef_p = CoefficientFunction(exact.cfs['p']).Compile()
+    coef_f = CoefficientFunction((exact.cfs["f1"], exact.cfs["f2"], exact.cfs["f3"])).Compile()
+    coef_g = CoefficientFunction(exact.cfs['g']).Compile()
+
     ### Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(phi)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
     lset_approx = lsetmeshadap.lset_p1
-    mesh.SetDeformation(deformation)
 
     # FESpace: Taylor-Hood element
-    VPhk   = VectorH1(mesh, order=order, dirichlet=[])
+    VPhk = VectorH1(mesh, order=order, dirichlet=[])
     Phkm1 = H1(mesh, order=order-1, dirichlet=[])
 
     ci = CutInfo(mesh, lset_approx)
@@ -583,46 +536,43 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     gfp = GridFunction(Q)
 
     # helper grid functions
-    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
+    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=coef_phi, vel_space=VPhk)
 
     # declare integration domains
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
     dX = dx(definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
-
-    # unpacking exact solution
-    uSol = CoefficientFunction((exact["u1"], exact["u2"], exact["u3"])).Compile()
-    pSol = CoefficientFunction(exact["p"]).Compile()
-    rhsf = CoefficientFunction((exact["f1"], exact["f2"], exact["f3"])).Compile()
-    rhsg = CoefficientFunction(exact["g"]).Compile()
 
     # define projection matrix
     n = Normalize(grad(lset_approx))
     Pmat = Id(3) - OuterProduct(n, n)
 
     # bilinear forms:
-    bilinear_form_args = {'alpha': alpha}
-    a, b, c, sq, f, g = define_forms(eq_type='steady_stokes',
-                                     V=V, Q=Q,
-                                     n=n, Pmat=Pmat, Hmat=Hmat, n_k=n_k,
-                                     rhsf=rhsf, rhsg=rhsg,
-                                     ds=ds, dX=dX, **bilinear_form_args)
+    bilinear_form_args = {'param_alpha': param_alpha, 'param_mu': param_mu}
+    a, b, c, sq, f, g = define_forms(
+        eq_type='steady_stokes',
+        V=V, Q=Q,
+        n=n, Pmat=Pmat, Hmat=Hmat, n_k=n_k,
+        coef_f=coef_f, coef_g=coef_g,
+        ds=ds, dX=dX, **bilinear_form_args
+    )
 
     start = time.perf_counter()
     with TaskManager():
-        prea = Preconditioner(a, "bddc")
-        presq = Preconditioner(sq, "bddc")
+        prea = Preconditioner(a, precond_name)
+        presq = Preconditioner(sq, precond_name)
 
         assemble_forms([a, b, c, sq, f, g])
 
-    print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    if logs:
+        print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     ### LINEAR SOLVER
 
     K = BlockMatrix([[a.mat, b.mat.T],
                      [b.mat, -c.mat]])
 
-    inva = CGSolver(a.mat, prea.mat, maxsteps=5, precision=1e-6)
-    invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-6)
+    inva = CGSolver(a.mat, prea.mat, maxsteps=cg_iter, precision=1e-4)
+    invsq = CGSolver(sq.mat, presq.mat, maxsteps=cg_iter, precision=1e-4)
 
     C = BlockMatrix([[inva, None], [None, invsq]])
 
@@ -631,8 +581,10 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
 
     start = time.perf_counter()
     with TaskManager():
-        solvers.MinRes(mat=K, pre=C, rhs=rhs, sol=sol, initialize=True, maxsteps=40, tol=1e-12)
-    print(f"{bcolors.OKBLUE}System solved    ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+        solvers.MinRes(mat=K, pre=C, rhs=rhs, sol=sol, initialize=True, maxsteps=minres_iter, printrates=printrates,
+                       tol=1e-12)
+    if logs:
+        print(f"{bcolors.OKBLUE}System solved    ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     ### POST-PROCESSING
 
@@ -643,53 +595,44 @@ def steady_stokes(mesh, alpha=1.0, order=2, out=False, **exact):
     ### ERRORS
 
     with TaskManager():
-        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
-        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, coef_p)
+        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, coef_u)
 
-    mesh.UnsetDeformation()
-
-    if out:
+    if vtk_out:
         with TaskManager():
             vtk = VTKOutput(ma=mesh,
-                            coefs=[lset_approx, deformation, gfu, gfp, uSol, pSol],
-                            names=["P1-levelset", "deform", "u", "p", "uSol", "pSol"],
-                            filename=f"steady-stokes-{exact['name']}", subdivision=0)
+                            coefs=[lset_approx, deformation, gfu, gfp, coef_u, coef_p],
+                            names=["lset_p1", "deform", "u", "p", "coef_u", "coef_p"],
+                            filename=f"./output/vtk_out/fixed_surface_steady_stokes_p{order}_{exact.name}_{vtk_out}",
+                            subdivision=0)
             vtk.Do()
 
     return V.ndof + Q.ndof, l2u, h1u, l2p, h1p
 
 
-def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
+def stokes(mesh, exact, dt, tfinal, order, linear_solver_params, vtk_out=None, logs=True, printrates=False):
     """
     Solves Unsteady Stokes problem on a provided mesh using P_k-P_{k-1} Taylor-Hood pair.
     The initial data and RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_poisson.py
         dt: float
             Time step size.
         tfinal: float
             Final time in the simulation.
         order: int
-            Polynomial order for velocity, default 2.
-        out: bool
-            Flag that indicates if VTK output is to be created.
-        **exact: Dict
-            A dictionary that contains information about the exact solution. Note that the CoefficientFunctions
-            should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
-            using OOP.
-            exact['name']: str
-                Name of the test case, refer to fixed_surface_steady_stokes_test.py for more details.
-            exact['phi']: CoefficientFunction
-                The levelset function.
-            exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
-                Each of the three components of the velocity solution of the PDE.
-            exact['p']: CoefficientFunction
-                Pressure solution of the PDE.
-            exact['f1'], exact['f2'], exact['f3']: CoefficientFunction
-                Each of the three components of the right-hand-side of the momentum equation.
-            exact['g']: CoefficientFunction
-                Right-hand-side of the continuity equation.
+            Polynomial order for FEM for velocity.
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
+        printrates: bool
+            Flag that indicates if linear solver residuals are to be printed.
 
     Returns:
         V.ndof + Q.ndof: int
@@ -705,18 +648,28 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
         h1ps: List[float]
             H^1-error of the pressure over Gamma at each time t_n
     """
-    phi = CoefficientFunction(exact["phi"]).Compile()
+    if order < 3:
+        precond_name = "bddc"
+        cg_iter = linear_solver_params['bddc_cg_iter']
+    else:
+        precond_name = "local"
+        cg_iter = linear_solver_params['jacobi_cg_iter']
+    minres_iter = linear_solver_params['minres_iter']
+
+    # unpack exact
+    param_rho = exact.params['rho']
+    param_mu = exact.params['mu']
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_u = CoefficientFunction((exact.cfs["u1"], exact.cfs["u2"], exact.cfs["u3"])).Compile()
+    coef_p = CoefficientFunction(exact.cfs['p']).Compile()
+    coef_f = CoefficientFunction((exact.cfs["f1"], exact.cfs["f2"], exact.cfs["f3"])).Compile()
+    coef_g = CoefficientFunction(exact.cfs['g']).Compile()
+
     # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(phi)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
     lset_approx = lsetmeshadap.lset_p1
-    mesh.SetDeformation(deformation)
-
-    alpha = 2.0 - np.sqrt(2.0)
-
-    t = Parameter(0.0)
-    tfun = 2. + sin(pi*t)
-    tfun_dif = tfun.Diff(t)
 
     # FESpace: Taylor-Hood element
     VPhk   = VectorH1(mesh, order=order, dirichlet=[])
@@ -732,7 +685,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     gfp = GridFunction(Q)
 
     # helper grid functions
-    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
+    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=coef_phi, vel_space=VPhk)
 
     # declare the integration domains
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
@@ -740,34 +693,32 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
 
     domMeas = get_dom_measure(Q, mesh, ds)
 
-    uSol = CoefficientFunction((tfun*exact["u1"], tfun*exact["u2"], tfun*exact["u3"])).Compile()
-    pSol = CoefficientFunction(tfun*exact["p"]).Compile()
-    rhsf = CoefficientFunction((tfun*exact["f1"] + tfun_dif*exact["u1"],
-                                tfun*exact["f2"] + tfun_dif*exact["u2"],
-                                tfun*exact["f3"] + tfun_dif*exact["u3"])).Compile()
-    rhsg = CoefficientFunction(tfun*exact["g"]).Compile()
-
     # define projection matrix
     n = Normalize(grad(lset_approx))
     Pmat = Id(3) - OuterProduct(n, n)
 
+    # Parameter for TR-BDF2
+    alpha = 2.0 - np.sqrt(2.0)
+
     ### bilinear forms:
-    bilinear_form_args = {'alpha': alpha, 'dt': dt}
+    bilinear_form_args = {'param_rho': param_rho, 'param_mu': param_mu, 'alpha': alpha, 'dt': dt}
     m, a, a2, b, c, sq, zerou, zeroq, f, g = define_forms(
         eq_type='stokes',
         V=V, Q=Q,
         n=n, Pmat=Pmat, Hmat=Hmat, n_k=n_k,
-        rhsf=rhsf, rhsg=rhsg,
-        ds=ds, dX=dX, **bilinear_form_args)
+        coef_f=coef_f, coef_g=coef_g,
+        ds=ds, dX=dX, **bilinear_form_args
+    )
 
     start = time.perf_counter()
     with TaskManager():
-        presq = Preconditioner(sq, "bddc")
-        prea = Preconditioner(a, "bddc")
+        prea = Preconditioner(a, precond_name)
+        presq = Preconditioner(sq, precond_name)
 
         assemble_forms([m, a, a2, b, c, sq, zerou, zeroq, f, g])
 
-    print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    if logs:
+        print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     ### LINEAR SOLVER
 
@@ -783,10 +734,8 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     M = BlockMatrix([[m.mat, None],
                      [None, zeroq.mat]])
 
-    maxsteps_minres = 100
-
-    inva = CGSolver(a.mat, prea.mat, maxsteps=5, precision=1e-4)
-    invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-4)
+    inva = CGSolver(a.mat, prea.mat, maxsteps=cg_iter, precision=1e-4)
+    invsq = CGSolver(sq.mat, presq.mat, maxsteps=cg_iter, precision=1e-4)
 
     C = BlockMatrix([[inva, None],
                      [None, invsq]])
@@ -805,16 +754,18 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     t_curr = 0.0  # time counter within one block-run
 
     # IC
-    t.Set(0.0)
+    exact.set_time(0.0)
 
-    gfu.Set(uSol)
-    gfp.Set(pSol)
+    mesh.SetDeformation(deformation)
+    gfu.Set(coef_u)
+    gfp.Set(coef_p)
+    mesh.UnsetDeformation()
 
-    if out:
+    if vtk_out:
         vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, deformation, gfu, gfp, uSol, pSol],
-                        names=["P1-levelset", "deform", "u", "p", "uSol", "pSol"],
-                        filename=f"./vtk_out/parab/{exact['name']}",
+                        coefs=[lset_approx, deformation, gfu, gfp, coef_u, coef_p],
+                        names=["lset_p1", "deform", "u", "p", "coef_u", "coef_p"],
+                        filename=f"./output/vtk_out/fixed_surface_steady_stokes_p{order}_{exact.name}_{vtk_out}",
                         subdivision=0)
         vtk.Do(time=0.0)
 
@@ -826,8 +777,8 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     out_errs = {'ts': [], 'l2us': [], 'h1us': [], 'l2ps': [], 'h1ps': []}
 
     with TaskManager():
-        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
-        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, coef_p)
+        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, coef_u)
     mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
     start = time.perf_counter()
@@ -835,7 +786,7 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
     fold.data = f.vec
     i = 0
     while t_curr < tfinal - 0.5 * dt:
-        t.Set(t_curr + alpha*dt)
+        exact.set_time(t_curr + alpha*dt)
         with TaskManager():
             f.Assemble()
             g.Assemble()
@@ -844,13 +795,13 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
         rhs.data = Fold + F - Atr * U
 
         with TaskManager():
-            solvers.MinRes(mat=A, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=maxsteps_minres, tol=1e-12,
-                           printrates=False)
+            solvers.MinRes(mat=A, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=minres_iter, tol=1e-12,
+                           printrates=printrates)
             U.data += diff
             renormalize(Q, mesh, ds, gfp, domMeas)
 
         # BDF2
-        t.Set(t_curr + dt)
+        exact.set_time(t_curr + dt)
         with TaskManager():
             f.Assemble()
             g.Assemble()
@@ -858,8 +809,8 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
         rhs.data = F + (1.0-alpha)/(alpha*dt)*M*diff - A2bdf2 * U
 
         with TaskManager():
-            solvers.MinRes(mat=Abdf2, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=maxsteps_minres, tol=1e-12,
-                           printrates=False)
+            solvers.MinRes(mat=Abdf2, pre=C, rhs=rhs, sol=diff, initialize=True, maxsteps=minres_iter, tol=1e-12,
+                           printrates=printrates)
             U.data += diff
             renormalize(Q, mesh, ds, gfp, domMeas)
 
@@ -867,63 +818,50 @@ def stokes(mesh, dt, tfinal=1.0, order=2, out=False, **exact):
 
         fold.data = f.vec
 
-        print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
+        if logs:
+            print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
-            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
-            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, coef_p)
+            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, coef_u)
         mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
-        if out:
+        if vtk_out:
             with TaskManager():
                 vtk.Do(time=t_curr)
         i += 1
 
-    print("")
-    end = time.perf_counter()
-    print(f" Time elapsed: {end - start: .5f} s")
-
-    mesh.UnsetDeformation()
+    if logs:
+        print("")
+        end = time.perf_counter()
+        print(f" Time elapsed: {end - start: .5f} s")
 
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **exact):
+def navier_stokes(mesh, exact, dt, tfinal, order, linear_solver_params, vtk_out=None, logs=True, printrates=False):
     """
     Solves Unsteady Navier-Stokes problem on a provided mesh using P_k-P_{k-1} Taylor-Hood pair.
     The initial data and RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_poisson.py
         dt: float
             Time step size.
         tfinal: float
             Final time in the simulation.
         order: int
-            Polynomial order for velocity, default 2.
-        out: bool
-            Flag that indicates if VTK output is to be created.
+            Polynomial order for FEM for velocity.
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
         printrates: bool
-            Flag that indicates if GMRes residuals are to be printed.
-        **exact: Dict
-            A dictionary that contains information about the exact solution. Note that the CoefficientFunctions
-            should be time-independent. Time dependence will be incorporated in the solver. I will fix this later
-            using OOP.
-            exact['name']: str
-                Name of the test case, refer to fixed_surface_steady_stokes_test.py for more details.
-            exact['phi']: CoefficientFunction
-                The levelset function.
-            exact['u1'], exact['u2'], exact['u3']: CoefficientFunction
-                Each of the three components of the velocity solution of the PDE.
-            exact['p']: CoefficientFunction
-                Pressure solution of the PDE.
-            exact['f1'], exact['f2'], exact['f3']: CoefficientFunction
-                Each of the three components of the right-hand-side of the momentum equation.
-            exact['g']: CoefficientFunction
-                Right-hand-side of the continuity equation.
-            exact['conv1'], exact['conv2'], exact['conv3']: CoefficientFunction
-                A symbolic expression corresponding to $\\mathbf{u}_T \\cdot \\nabla_{\\Gamma} \\mathbf{u}_T$
-                where $\\mathbf{u}$ is the solution of the steady Stokes problem.
+            Flag that indicates if linear solver residuals are to be printed.
 
     Returns:
         V.ndof + Q.ndof: int
@@ -939,16 +877,30 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
         h1ps: List[float]
             H^1-error of the pressure over Gamma at each time t_n
     """
-    nu = exact['nu']
-    phi = CoefficientFunction(exact["phi"]).Compile()
-    # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(phi)
-    lset_approx = lsetmeshadap.lset_p1
+    if order < 3:
+        precond_spd = "bddc"
+        cg_iter = linear_solver_params['bddc_cg_iter']
+    else:
+        precond_spd = "local"
+        cg_iter = linear_solver_params['jacobi_cg_iter']
+    precond_nonsym = 'local'
+    gmres_iter_inner = linear_solver_params['gmres_iter_inner']
+    gmres_iter_outer = linear_solver_params['gmres_iter_outer']
 
-    t = Parameter(-dt)
-    tfun = 1.0 + sin(pi * t)
-    tfun_dif = tfun.Diff(t)
+    # unpack exact
+    param_rho = exact.params['rho']
+    param_mu = exact.params['mu']
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_u = CoefficientFunction((exact.cfs["u1"], exact.cfs["u2"], exact.cfs["u3"])).Compile()
+    coef_p = CoefficientFunction(exact.cfs['p']).Compile()
+    coef_f = CoefficientFunction((exact.cfs["f1"], exact.cfs["f2"], exact.cfs["f3"])).Compile()
+    coef_g = CoefficientFunction(exact.cfs['g']).Compile()
+
+    # Levelset adaptation
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
+    lset_approx = lsetmeshadap.lset_p1
 
     # FESpace: Taylor-Hood element
     VPhk = VectorH1(mesh, order=order, dirichlet=[])
@@ -966,7 +918,7 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
     gfp = GridFunction(Q)
 
     # helper grid functions
-    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=phi, vel_space=VPhk)
+    n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=coef_phi, vel_space=VPhk)
 
     # declare the integration domains
     ds = dCut(levelset=lset_approx, domain_type=IF, definedonelements=ci.GetElementsOfType(IF), deformation=deformation)
@@ -974,56 +926,51 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
 
     domMeas = get_dom_measure(Q, mesh, ds)
 
-    uSol = CoefficientFunction((tfun * exact["u1"], tfun * exact["u2"], tfun * exact["u3"])).Compile()
-    pSol = CoefficientFunction(tfun * exact["p"]).Compile()
-    rhsf = CoefficientFunction((tfun * exact["f1"] + tfun_dif * exact["u1"] + tfun*tfun*exact["conv1"],
-                                tfun * exact["f2"] + tfun_dif * exact["u2"] + tfun*tfun*exact["conv2"],
-                                tfun * exact["f3"] + tfun_dif * exact["u3"] + tfun*tfun*exact["conv3"])).Compile()
-    rhsg = CoefficientFunction(tfun * exact["g"]).Compile()
-
     # define projection matrix
     n = Normalize(grad(lset_approx))
     Pmat = Id(3) - OuterProduct(n, n)
 
-    t.Set(-dt)
+    exact.set_time(-dt)
     mesh.SetDeformation(deformation)
-    gfu_prev.Set(uSol)
+    gfu_prev.Set(coef_u)
     mesh.UnsetDeformation()
 
-    t.Set(0.0)
+    exact.set_time(0.0)
     mesh.SetDeformation(deformation)
-    gfu.Set(uSol)
-    gfp.Set(pSol)
+    gfu.Set(coef_u)
+    gfp.Set(coef_p)
     mesh.UnsetDeformation()
 
     gfu_approx.Set(2. * gfu - gfu_prev)
-    dtparam = 3./2
+    bdf_coeff = 3./2
 
     # BI-LINEAR FORMS
-    bilinear_form_args = {'nu': nu, 'dt': dt, 'dtparam': dtparam, 'gfu_approx': gfu_approx}
+    bilinear_form_args = {'param_rho': param_rho, 'param_mu': param_mu, 'bdf_coeff': bdf_coeff, 'dt': dt,
+                          'gfu_approx': gfu_approx}
 
     m, a, ap, pd, b, c, sq, f, g = define_forms(
         eq_type='ns',
         V=V, Q=Q,
         n=n, Pmat=Pmat, Hmat=Hmat, n_k=n_k,
-        rhsf=rhsf, rhsg=rhsg,
+        coef_f=coef_f, coef_g=coef_g,
         ds=ds, dX=dX, **bilinear_form_args
     )
 
     start = time.perf_counter()
     with TaskManager():
-        presq = Preconditioner(sq, "bddc")
-        prepd = Preconditioner(pd, "bddc")
-        prea = Preconditioner(a, "local")
+        presq = Preconditioner(sq, precond_spd)
+        prepd = Preconditioner(pd, precond_spd)
+        prea = Preconditioner(a, precond_nonsym)
 
         assemble_forms([b, c, sq, m, pd])
 
-    print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    if logs:
+        print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     # LINEAR SOLVER
 
-    invsq = CGSolver(sq.mat, presq.mat, maxsteps=5, precision=1e-6)
-    invpd = CGSolver(pd.mat, prepd.mat, maxsteps=5, precision=1e-6)
+    invsq = CGSolver(sq.mat, presq.mat, maxsteps=cg_iter, precision=1e-4)
+    invpd = CGSolver(pd.mat, prepd.mat, maxsteps=cg_iter, precision=1e-4)
 
     U = BlockVector([gfu.vec, gfp.vec])
 
@@ -1031,11 +978,11 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
 
     t_curr = 0.0  # time counter within one block-run
 
-    if out:
+    if vtk_out:
         vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, deformation, gfu, gfp, uSol, pSol],
-                        names=["P1-levelset", "deform", "u", "p", "uSol", "pSol"],
-                        filename=f"./vtk_out/parab/ns-{exact['name']}-{nu:.2f}",
+                        coefs=[lset_approx, deformation, gfu, gfp, coef_u, coef_p],
+                        names=["lset_p1", "deform", "u", "p", "coef_u", "coef_p"],
+                        filename=f"./output/vtk_out/fixed_surface_steady_stokes_p{order}_{exact.name}_{vtk_out}_mu={param_mu}",
                         subdivision=0)
         vtk.Do(time=0.0)
 
@@ -1050,19 +997,19 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
     out_errs = {'ts': [], 'l2us': [], 'h1us': [], 'l2ps': [], 'h1ps': []}
 
     with TaskManager():
-        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
-        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+        l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, coef_p)
+        l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, coef_u)
     mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
     start = time.perf_counter()
 
     while t_curr < tfinal - 0.5 * dt:
-        t.Set(t_curr + dt)
+        exact.set_time(t_curr + dt)
         gfu_approx.Set(2.0 * gfu - gfu_prev)
         with TaskManager():
             assemble_forms([f, g, a, ap])
 
-            inva = GMRESSolver(a.mat, prea.mat, maxsteps=2000, precision=1e-6)
+            inva = GMRESSolver(a.mat, prea.mat, maxsteps=gmres_iter_inner, precision=1e-4)
             invms = invsq @ ap.mat @ invpd
 
             A = BlockMatrix([[a.mat, b.mat.T],
@@ -1078,35 +1025,35 @@ def navier_stokes(mesh, dt, tfinal=1.0, order=2, out=False, printrates=False, **
 
             gfu_prev.Set(gfu)
 
-            solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=100, reltol=1e-12)
+            solvers.GMRes(A=A, b=rhs, pre=C, x=diff, printrates=printrates, maxsteps=gmres_iter_outer, reltol=1e-12)
             U += diff
 
             renormalize(Q, mesh, ds, gfp, domMeas)
 
         t_curr += dt
 
-        if printrates:
-            print(f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)")
-        else:
+        if logs:
             print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
-            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, pSol)
-            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, uSol)
+            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, coef_p)
+            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, coef_u)
         mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
-        if out:
+        if vtk_out:
             with TaskManager():
                 vtk.Do(time=t_curr)
 
-    print("")
-    end = time.perf_counter()
-    print(f" Time elapsed: {end - start: .5f} s")
+    if logs:
+        print("")
+        end = time.perf_counter()
+        print(f" Time elapsed: {end - start: .5f} s")
 
     return V.ndof + Q.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def moving_ns(mesh, dt, order, tfinal, exact, band, time_order=2, out=False, fname=None):
+def moving_ns(mesh, exact, dt, tfinal, order, time_order, band,
+              linear_solver_params, vtk_out=None, logs=True, printrates=False):
     """
     Solves evolving-surface Tangential Navier-Stokes on a provided mesh using GMRes. Intended to be used with zero RHS
     of the continuity equation (i.e. g=0). Otherwise might be unstable.
@@ -1114,22 +1061,26 @@ def moving_ns(mesh, dt, order, tfinal, exact, band, time_order=2, out=False, fna
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_poisson.py
         dt: float
             Time step size.
-        order: int
-            Polynomial order for FEM, default 1.
         tfinal: float
             Final time in the simulation.
-        exact: Exact
-            Exact solution object, see laplace_solvers.py file.
-        band: float
-            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        order: int
+            Polynomial order for FEM for velocity.
         time_order: int
             Order of time discretization (BDF in this case).
-        out: bool
-            Flag that indicates if VTK output is to be created.
-        fname: str
-            File name for VTK output.
+        band: float
+            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
+        printrates: bool
+            Flag that indicates if linear solver residuals are to be printed.
     Returns:
         np.mean(dofs): float
             Mean number of dofs per time step.
@@ -1144,20 +1095,39 @@ def moving_ns(mesh, dt, order, tfinal, exact, band, time_order=2, out=False, fna
         h1ps: List[float]
             List of H^1-errors in pressure for each t_n.
     """
+    if order < 3:
+        precond_name = "bddc"
+        cg_iter = linear_solver_params['bddc_cg_iter']
+    else:
+        precond_name = "local"
+        cg_iter = linear_solver_params['jacobi_cg_iter']
+    gmres_iter_outer = linear_solver_params['gmres_iter_outer']
+
     bdf_coeffs = [[1, -1],
                   [3 / 2, -2, 1 / 2],
                   [11 / 6, -3, 3 / 2, -1 / 3]]
 
     bdf_coeff = bdf_coeffs[time_order - 1]
 
+    # unpack exact
+    param_rho = exact.params['rho']
+    param_mu = exact.params['mu']
+
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_wN = CoefficientFunction(exact.cfs["wN"]).Compile()
+    coef_u = CoefficientFunction((exact.cfs["u1"], exact.cfs["u2"], exact.cfs["u3"])).Compile()
+    coef_p = CoefficientFunction(exact.cfs['p']).Compile()
+    coef_f = CoefficientFunction((exact.cfs["f1"], exact.cfs["f2"], exact.cfs["f3"])).Compile()
+    coef_g = CoefficientFunction(exact.cfs['g']).Compile()
+
     # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(exact.phi)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
     lset_approx = GridFunction(H1(mesh, order=1, dirichlet=[]))
     ba_IF = BitArray(mesh.ne)
     ba_IF_band = BitArray(mesh.ne)
 
-    update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+    update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
 
     # FESpace: Taylor-Hood element
     V = VectorH1(mesh, order=order, dirichlet=[])
@@ -1180,51 +1150,57 @@ def moving_ns(mesh, dt, order, tfinal, exact, band, time_order=2, out=False, fna
     keys = ['ts', 'l2us', 'h1us', 'l2ps', 'h1ps']
     out_errs = {'ts': [], 'l2us': [], 'h1us': [], 'l2ps': [], 'h1ps': []}
 
-    if out:
+    if vtk_out:
         gfu_out = GridFunction(V)
         gfp_out = GridFunction(Q)
-        if fname:
-            filename = f"./vtk_out/diffusion/moving-ns-{fname}"
-        else:
-            filename = "./vtk_out/diffusion/moving-ns"
         vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, exact.phi, gfu_out, exact.u, gfp_out, exact.p],
+                        coefs=[lset_approx, coef_phi, gfu_out, gfp_out, coef_u, coef_p],
                         names=["P1-levelset", "phi", "u", "uSol", "p", "pSol"],
-                        filename=filename,
+                        filename=f"./output/vtk_out/fixed_surface_steady_stokes_p{order}_{exact.name}_{vtk_out}_mu={param_mu}",
                         subdivision=0)
+
+    start = time.perf_counter()
 
     set_ic(
         mesh=mesh, V=V, order=order, gfu_prevs=gfu_prevs, exact=exact, dt=dt,
         lsetmeshadap=lsetmeshadap, lset_approx=lset_approx, band=band, ba_IF=ba_IF, ba_IF_band=ba_IF_band,
-        n=n, Pmat=Pmat, rho_u=rho_u, tau=tau, ds=ds, dX=dX
+        n=n, Pmat=Pmat, rho_u=rho_u, tau=tau, ds=ds, dX=dX, precond_name=precond_name, cg_iter=cg_iter
     )
+
+    if logs:
+        print(f"{bcolors.OKGREEN}IC for BDF{time_order} initialized ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     dofs = []
     # TIME MARCHING
     exact.set_time(0.0)
     t_curr = 0.0
 
-    if out:
+    if vtk_out:
         gfu_out.Set(gfu_prevs[0])
-        gfp_out.Set(exact.p)
+        gfp_out.Set(coef_p)
         vtk.Do(time=t_curr)
 
     i = 1
+
+    start = time.perf_counter()
+
+    time_assembly = 0.0
+    time_solver = 0.0
 
     while t_curr < tfinal + dt/2:
         exact.set_time(t_curr + dt)
         t_curr += dt
         with TaskManager():
-            deformation = lsetmeshadap.CalcDeformation(exact.phi)
+            deformation = lsetmeshadap.CalcDeformation(coef_phi)
 
-            update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+            update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
 
             VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
             QG = Compress(Q, GetDofsOfElements(Q, ba_IF))
             dofs.append(VG.ndof + QG.ndof)
 
             # helper grid functions
-            n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=exact.phi, vel_space=V)
+            n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=coef_phi, vel_space=V)
 
         gfu_approx = GridFunction(VG)
         if time_order == 1:
@@ -1240,23 +1216,26 @@ def moving_ns(mesh, dt, order, tfinal, exact, band, time_order=2, out=False, fna
             n=n, Pmat=Pmat, n_k=n_k, Hmat=Hmat,
             tau=tau, rho_u=rho_u, rho_p=rho_p,
             ds=ds, dX=dX, dX2=dX2,
-            exact=exact, gfu_approx=gfu_approx, gfu_prevs=gfu_prevs,
+            param_rho=param_rho, param_mu=param_mu, coef_wN=coef_wN, coef_f=coef_f, coef_g=coef_g,
+            gfu_approx=gfu_approx, gfu_prevs=gfu_prevs,
             solver='gmres'
         )
 
         with TaskManager():
-            pre_a = Preconditioner(a, "bddc")
-            pre_pd = Preconditioner(pd, "bddc")
-            pre_sq = Preconditioner(sq, "bddc")
+            pre_a = Preconditioner(a, precond_name)
+            pre_pd = Preconditioner(pd, precond_name)
+            pre_sq = Preconditioner(sq, precond_name)
 
+            start_assembly = time.perf_counter()
             assemble_forms([a, ap, pd, sq, b, c, f, g])
+            time_assembly += (time.perf_counter() - start_assembly)
 
             K = BlockMatrix([[a.mat, b.mat.T],
                              [b.mat, -c.mat]])
 
-            inva = CGSolver(a.mat, pre_a.mat, maxsteps=20, precision=1e-6)
-            invpd = CGSolver(pd.mat, pre_pd.mat, maxsteps=10, precision=1e-6)
-            invsq = CGSolver(sq.mat, pre_sq.mat, maxsteps=10, precision=1e-6)
+            inva = CGSolver(a.mat, pre_a.mat, maxsteps=cg_iter, precision=1e-6)
+            invpd = CGSolver(pd.mat, pre_pd.mat, maxsteps=cg_iter, precision=1e-6)
+            invsq = CGSolver(sq.mat, pre_sq.mat, maxsteps=cg_iter, precision=1e-6)
             invms = invsq @ ap.mat @ invpd
 
             C = BlockMatrix([[inva, inva @ b.mat.T @ invms],
@@ -1273,55 +1252,64 @@ def moving_ns(mesh, dt, order, tfinal, exact, band, time_order=2, out=False, fna
             sol = BlockVector([gfu.vec,
                                gfp.vec])
 
-            solvers.GMRes(A=K, b=rhs, pre=C, x=sol, printrates=False, maxsteps=100, reltol=1e-12)
+            start_solver = time.perf_counter()
+            solvers.GMRes(A=K, b=rhs, pre=C, x=sol, printrates=printrates, maxsteps=gmres_iter_outer, reltol=1e-12)
+            time_solver += (time.perf_counter() - start_solver)
 
             # making numerical pressure mean zero
             renormalize(QG, mesh, ds, gfp)
 
-            if out:
+            if vtk_out:
                 gfu_out.Set(gfu)
                 gfp_out.Set(gfp)
                 vtk.Do(time=t_curr)
 
-            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, exact.p)
-            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, exact.u)
+            l2p, h1p = errors_scal(mesh, ds, Pmat, gfp, coef_p)
+            l2u, h1u = errors_vec(mesh, ds, Pmat, gfu, coef_u)
 
             gfu_prevs[0].Set(gfu)
             mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
-        print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
+        if logs:
+            print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         i += 1
-    print("")
+
+    if logs:
+        print("")
+        end = time.perf_counter()
+        print(f" Time elapsed: {end - start: .5f} s")
+        print(f"{bcolors.OKCYAN}Time in assembly:        {time_assembly:.5f} s.{bcolors.ENDC}")
+        print(f"{bcolors.OKBLUE}Time in solver:          {time_solver:.5f} s.{bcolors.ENDC}")
 
     return np.mean(dofs), out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']
 
 
-def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=False, fname=None):
+def moving_ns_direct(mesh, exact, dt, tfinal, order, time_order, band,
+                     vtk_out=None, logs=True):
     """
-    Solves evolving-surface Tangential Navier-Stokes on a provided mesh using DIRECT SOLVER. This is a temporary
-    workaround for the case of non-homogeneous right-hand side of the continuity condition (for which GMRes solver
-    is not stable in this library).
+    Solves evolving-surface Tangential Navier-Stokes on a provided mesh using GMRes. Intended to be used with zero RHS
+    of the continuity equation (i.e. g=0). Otherwise might be unstable.
     The initial data and RHS needs to be specified in an object exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
+        exact: exact.Exact
+            Exact solution object, see exact.py and fixed_surface_poisson.py
         dt: float
             Time step size.
-        order: int
-            Polynomial order for FEM, default 1.
         tfinal: float
             Final time in the simulation.
-        exact: Exact
-            Exact solution object, see laplace_solvers.py file.
-        band: float
-            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        order: int
+            Polynomial order for FEM for velocity.
         time_order: int
             Order of time discretization (BDF in this case).
-        out: bool
-            Flag that indicates if VTK output is to be created.
-        fname: str
-            File name for VTK output.
+        band: float
+            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
     Returns:
         np.mean(dofs): float
             Mean number of dofs per time step.
@@ -1342,16 +1330,26 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
 
     bdf_coeff = bdf_coeffs[time_order - 1]
 
-    # MESH
+    # unpack exact
+    param_rho = exact.params['rho']
+    param_mu = exact.params['mu']
 
+    coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
+    coef_wN = CoefficientFunction(exact.cfs["wN"]).Compile()
+    coef_u = CoefficientFunction((exact.cfs["u1"], exact.cfs["u2"], exact.cfs["u3"])).Compile()
+    coef_p = CoefficientFunction(exact.cfs['p']).Compile()
+    coef_f = CoefficientFunction((exact.cfs["f1"], exact.cfs["f2"], exact.cfs["f3"])).Compile()
+    coef_g = CoefficientFunction(exact.cfs['g']).Compile()
+
+    # MESH
     # Levelset adaptation
-    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
-    deformation = lsetmeshadap.CalcDeformation(exact.phi)
+    lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order, heapsize=100000000)
+    deformation = lsetmeshadap.CalcDeformation(coef_phi)
     lset_approx = GridFunction(H1(mesh, order=1, dirichlet=[]))
     ba_IF = BitArray(mesh.ne)
     ba_IF_band = BitArray(mesh.ne)
 
-    update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+    update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
 
     # FESpace: Taylor-Hood element
     V = VectorH1(mesh, order=order, dirichlet=[])
@@ -1374,18 +1372,16 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
     keys = ['ts', 'l2us', 'h1us', 'l2ps', 'h1ps']
     out_errs = {'ts': [], 'l2us': [], 'h1us': [], 'l2ps': [], 'h1ps': []}
 
-    if out:
+    if vtk_out:
         gfu_out = GridFunction(V)
         gfp_out = GridFunction(Q)
-        if fname:
-            filename = f"./vtk_out/diffusion/moving-ns-{fname}"
-        else:
-            filename = "./vtk_out/diffusion/moving-ns"
         vtk = VTKOutput(mesh,
-                        coefs=[lset_approx, exact.phi, gfu_out, exact.u, gfp_out, exact.p],
+                        coefs=[lset_approx, coef_phi, gfu_out, gfp_out, coef_u, coef_p],
                         names=["P1-levelset", "phi", "u", "uSol", "p", "pSol"],
-                        filename=filename,
+                        filename=f"./output/vtk_out/fixed_surface_steady_stokes_p{order}_{exact.name}_{vtk_out}_mu={param_mu}",
                         subdivision=0)
+
+    start = time.perf_counter()
 
     set_ic(
         mesh=mesh, V=V, order=order, gfu_prevs=gfu_prevs, exact=exact, dt=dt,
@@ -1393,12 +1389,15 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         n=n, Pmat=Pmat, rho_u=rho_u, tau=tau, ds=ds, dX=dX
     )
 
+    if logs:
+        print(f"{bcolors.OKGREEN}IC for BDF{time_order} initialized ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+
     dofs = []
     # TIME MARCHING
     exact.set_time(0.0)
     t_curr = 0.0
 
-    if out:
+    if vtk_out:
         gfu_out.Set(gfu_prevs[0])
         gfp_out.Set(exact.p)
         vtk.Do(time=t_curr)
@@ -1407,12 +1406,17 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
 
     l2err_old = 0.0
 
+    start = time.perf_counter()
+
+    time_assembly = 0.0
+    time_solver = 0.0
+
     while t_curr < tfinal + dt/2:
         exact.set_time(t_curr + dt)
         with TaskManager():
-            deformation = lsetmeshadap.CalcDeformation(exact.phi)
+            deformation = lsetmeshadap.CalcDeformation(coef_phi)
 
-            update_geometry(mesh, exact.phi, lset_approx, band, ba_IF, ba_IF_band)
+            update_geometry(mesh, coef_phi, lset_approx, band, ba_IF, ba_IF_band)
 
             VG = Compress(V, GetDofsOfElements(V, ba_IF_band))
             QG = Compress(Q, GetDofsOfElements(Q, ba_IF))
@@ -1420,7 +1424,7 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
             dofs.append(XG.ndof)
 
             # helper grid functions
-            n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=exact.phi, vel_space=V)
+            n_k, Hmat = helper_grid_functions(mesh=mesh, order=order, levelset=coef_phi, vel_space=V)
 
         gfu_approx = GridFunction(VG)
         if time_order == 1:
@@ -1436,15 +1440,21 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
             n=n, Pmat=Pmat, n_k=n_k, Hmat=Hmat,
             tau=tau, rho_u=rho_u, rho_p=rho_p,
             ds=ds, dX=dX, dX2=dX2,
-            exact=exact, gfu_approx=gfu_approx, gfu_prevs=gfu_prevs,
+            param_rho=param_rho, param_mu=param_mu, coef_wN=coef_wN, coef_f=coef_f, coef_g=coef_g,
+            gfu_approx=gfu_approx, gfu_prevs=gfu_prevs,
             solver='direct', XG=XG
         )
 
         with TaskManager():
+            start_assembly = time.perf_counter()
             assemble_forms([a, f])
+            time_assembly += (time.perf_counter() - start_assembly)
+
             gf = GridFunction(XG)
 
+        start_solver = time.perf_counter()
         gf.vec.data = a.mat.Inverse(freedofs=XG.FreeDofs(), inverse="umfpack") * f.vec
+        time_solver += (time.perf_counter() - start_solver)
 
         gfu = gf.components[0]
 
@@ -1460,7 +1470,7 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         # making numerical pressure mean zero
         renormalize(QG, mesh, ds, gfp)
 
-        if out:
+        if vtk_out:
             gfu_out.Set(gfu)
             gfp_out.Set(gfp)
             vtk.Do(time=t_curr+dt)
@@ -1471,11 +1481,18 @@ def moving_ns_direct(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         gfu_prevs[0].Set(gfu)
         mass_append(keys=keys, vals=[t_curr, l2u, h1u, l2p, h1p], **out_errs)
 
-        print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
+        if logs:
+            print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         l2err_old = l2err
         t_curr += dt
         i += 1
-    print("")
+
+    if logs:
+        print("")
+        end = time.perf_counter()
+        print(f" Time elapsed: {end - start: .5f} s")
+        print(f"{bcolors.OKCYAN}Time in assembly:        {time_assembly:.5f} s.{bcolors.ENDC}")
+        print(f"{bcolors.OKBLUE}Time in solver:          {time_solver:.5f} s.{bcolors.ENDC}")
 
     return np.mean(dofs), out_errs['ts'], out_errs['l2us'], out_errs['h1us'], out_errs['l2ps'], out_errs['h1ps']

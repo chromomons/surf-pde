@@ -1,7 +1,10 @@
 from xfem.lsetcurv import *
 from netgen.csg import CSGeometry, OrthoBrick, Pnt
 from ngsolve import TaskManager
-
+from sympy.parsing.mathematica import mathematica
+from sympy import printing
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # FORMATTING TOOLS
 class bcolors:
@@ -179,6 +182,25 @@ def mass_append(keys, vals, **dict):
     """
     for key, val in zip(keys, vals):
         dict[key].append(val)
+
+
+def print_test_info(problem_name):
+    """
+    Prints test information based on the problem.
+    Args:
+        problem_name: str
+            Name of the problem
+    Returns:
+
+    """
+    name_dict = {'fixed_surface_poisson': "fixed-surface Poisson",
+                 'fixed_surface_diffusion': "fixed-surface diffusion",
+                 'evolving_surface_diffusion': "evolving-surface diffusion",
+                 'fixed_surface_steady_stokes': "fixed-surface steady Stokes",
+                 'fixed_surface_unsteady_stokes': "fixed-surface unsteady Stokes",
+                 'fixed_surface_navier_stokes': "fixed-surface Navier-Stokes",
+                 'evolving_surface_navier_stokes': "evolving-surface Navier-Stokes"}
+    printbf(f"Solving {name_dict[problem_name]} problem.")
 
 
 # ERRORS
@@ -384,3 +406,97 @@ def update_geometry(mesh, phi, lset_approx, band, ba_IF, ba_IF_band):
     ba_IF.Clear()
     ba_IF |= ci.GetElementsOfType(IF)
     update_ba_IF_band(lset_approx, mesh, band, ba_IF_band)
+
+
+# PARSING MATHEMATICA INPUT
+def sympy_to_cf(func, params):
+    """
+    Converts a sympy expression to a NGSolve coefficient function. Taken from
+    https://ngsolve.org/forum/ngspy-forum/746-gradient-of-finite-element-function-inaccurately-integrated
+    Args:
+        func: str
+            Mathematica expression as a string.
+        params: dict
+            A dictionary of parameters of the expression other than x,y,z,t.
+
+    Returns:
+        out: CoefficientFunction
+            A coefficient function corresponding to the mathematica expression.
+    """
+    out = {}
+    exec('from ngsolve import *; cf='+printing.sstr(func)+';', params, out)
+    return out['cf']
+
+
+def math_dict_to_cfs(d, params):
+    """
+    Takes dictionary d as an input and returns a dictionary of coefficient functions with the same keys.
+    Args:
+        d: dict
+            A dictionary of Mathematica expressions.
+        params: dict
+            A dictionary of parameters of the expression other than x,y,z,t.
+    Returns:
+        cfs: dict
+            A dictionary of corresponding coefficient functions with the same keys.
+    """
+    cfs = {}
+    for key, value in d.items():
+        cfs[key] = sympy_to_cf(mathematica(value), params)
+    return cfs
+
+
+# Generate error plots
+def plt_out(ts, l2us, h1us, title, fname, l2ps=None, h1ps=None):
+    """
+    Produces error vs time plots.
+    Args:
+        ts: List[float]
+            List of times t_n at which FEM solution was computed.
+        l2us: List[float]
+            Errors in L^2 norm over Gamma for u corresponding to discrete times in ts.
+        h1us: List[float]
+            Errors in H^1 norm over Gamma for u corresponding to discrete times in ts.
+        title: str
+            Title of the plot.
+        fname: str
+            Filename for the figure.
+        l2ps: List[float], default: None
+            If provided, errors in L^2 norm over Gamma for p corresponding to discrete times in ts.
+        h1ps: List[float], default: None
+            If provided, errors in H^1 norm over Gamma for p corresponding to discrete times in ts.
+    Returns:
+
+    """
+    sns.set()
+    if l2ps and h1ps:
+        fig, axs = plt.subplots(2, 2)
+        latex_u = r"$\mathbf{{u}}_T$"
+    else:
+        fig, axs = plt.subplots(1, 2)
+        latex_u = "$u$"
+
+    fig.set_figwidth(20)
+    fig.set_figheight(15)
+
+    plt.suptitle(rf"{title}")
+
+    axs[0, 0].plot(ts, l2us)
+    axs[0, 0].set_title(rf"$L^2$-error in {latex_u}")
+    axs[0, 0].set_ylim(0.0)
+
+    axs[0, 1].plot(ts, h1us)
+    axs[0, 1].set_title(rf"$H^1$-error in {latex_u}")
+    axs[0, 1].set_ylim(0.0)
+
+    if l2ps and h1ps:
+        axs[1, 0].plot(ts, l2ps)
+        axs[1, 0].set_title(rf"$L^2$-error in $p$")
+        axs[1, 0].set_ylim(0.0)
+
+        axs[1, 1].plot(ts, h1ps)
+        axs[1, 1].set_title(rf"$H^1$-error in $p$")
+        axs[1, 1].set_ylim(0.0)
+
+    plt.show()
+    plt.savefig(f"./output/plt_out/{fname}.png")

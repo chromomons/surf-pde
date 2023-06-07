@@ -1,115 +1,157 @@
-from ngsolve import SetNumThreads
-import pandas as pd
+import sys
 import numpy as np
-import scipy.integrate as sci
-import matplotlib.pyplot as plt
-import seaborn as sns
+import pandas as pd
 import json
-from math import pi
+import scipy.integrate as sci
+from ngsolve import SetNumThreads
 
-from utils import *
+from utils import math_dict_to_cfs, refine_at_levelset, background_mesh, printbf, print_test_info
 from laplace_solvers import diffusion
 from exact import Exact
 
-SetNumThreads(16)
+num_cl_args = len(sys.argv)
+if num_cl_args <= 1:
+    print("Need to specify path to the JSON input file.")
+    exit(1)
+elif num_cl_args >= 3:
+    print("Too many input arguments. Need to only specify path to the JSON input file.")
+    exit(1)
+else:
+    input_file_name = str(sys.argv[1])
 
-f = open('input/input_fixed_surface_diffusion_test.json')
+problem_name = "fixed_surface_diffusion"
+print_test_info(problem_name)
+
+f = open(input_file_name)
+
+# loading JSON input files
 args = json.load(f)
 
-mode = args['mode']
-order = args['order']
-alpha = args['alpha']
-nu = args['nu']
-tfinal = args['tfinal']
-stab_type = args['stab_type']
-unif_ref = args['unif_ref']
-max_nref = args['max_nref']
-fname = args['fname']
-plt_out = args['plt_out']
-bad_rhs = args['bad_rhs']
-lamb = args['lamb']
+# Setting number of threads
+SetNumThreads(args['num_threads'])
 
-# EXACT QUANTITIES
+path_to_math_json = args['path_to_math_json']
+f_math = open(path_to_math_json)
+args_math = json.load(f_math)
 
-if mode == 'circ':
-    R = 1.0
-    params = {"nu": nu, "alpha": alpha, "R": R}
-    exact = Exact(params)
-    t = exact.t
-    cfs = {
-        "phi": sqrt(x*x + y*y + z*z) - R,
-        "u": (1 + sin(pi * t)) * sin(pi * x) * sin(pi * y * z),
-        "f": pi*(2*nu*x*(2*pi*y*z*cos(pi*y*z) + sin(pi*y*z))*(sin(pi*t) + 1)*cos(pi*x) + (6*nu*y*z*(sin(pi*t) + 1)*cos(pi*y*z) + (alpha*(x**2 + y**2 + z**2)*cos(pi*t) + pi*nu*(sin(pi*t) + 1)*(y**4 + y**2*(x**2 - 2*z**2 + 1) + z**2*(x**2 + z**2 + 1)))*sin(pi*y*z))*sin(pi*x))/(x**2 + y**2 + z**2)
-    }
-    exact.set_cfs(cfs)
-    bbox_sz = 1.0
-elif mode == 'circ-rough':
-    R = 1.0
-    params = {"nu": nu, "alpha": alpha, "params": lamb, "R": R}
-    exact = Exact(params)
-    t = exact.t
-    tfun = 1 + sin(pi * t)
-    cfs = {
-        "phi": sqrt(x * x + y * y + z * z) - 1,
-        "u": tfun * (sin(acos(z))) ** lamb * sin(atan2(y, x)),
-        "f": tfun * ((lamb ** 2 + lamb) * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + (1 - lamb ** 2) * (sin(acos(z))) ** (lamb - 2) * sin(atan2(y, x))) + pi*cos(pi*t) * (sin(acos(z))) ** lamb * sin(atan2(y, x)),
-        "fel": alpha * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + nu * ((lamb ** 2 + lamb) * (sin(acos(z))) ** lamb * sin(atan2(y, x)) + (1 - lamb ** 2) * (sin(acos(z))) ** (lamb - 2) * sin(atan2(y, x)))
-    }
-    exact.set_cfs(cfs)
-    bbox_sz = 1.0
-else:
-    print("Invalid mode.")
-    exit(1)
+# name of the test
+name = args['name']
 
-df = pd.DataFrame(columns=['h', 'dt', 'ndof', 'l2u', 'h1u'])
+# orders: space and time orders
+orders = args['orders']
+space_order = orders['space_order']
+time_order = 2
+
+# PDE parameters
+pde_params = args['pde_params']
+# Solution parameters (can be useful if solution regularity depends on a parameter)
+soln_params = args['soln_params']
+# Parameters of the levelset
+lset_params = args['lset_params']
+# Meshing parameters
+meshing_params = args['meshing_params']
+# Output flags
+out_params = args['out_params']
+# Linear solver params
+linear_solver_params = args['linear_solver_params']
+# Solver params for time-dependent problems (tfinal and optional stab_type)
+solver_params = args['solver_params']
+
+# Unpacking some of the parameters
+
+# text output of errors, separated by & for latex tables
+txt_out = out_params['txt_out']
+# vtk_out for VTK output
+vtk_out = out_params['vtk_out']
+# csv output of errors at each time t, useful with time-dependent problems
+csv_out = out_params['csv_out']
+# solver logs (i.e. how much time is spend in assembly and linear solver)
+solver_logs = out_params['solver_logs']
+# might be useful
+print_sparse_solver_rates = out_params['print_sparse_solver_rates']
+
+# half the size of the bounding box
+bbox_sz = meshing_params['bbox_sz']
+# number of uniform refinements
+unif_ref = meshing_params['unif_ref']
+# number of refinements at or around levelset
+max_nref = meshing_params['max_nref']
+
+tfinal = solver_params['tfinal']
+stab_type = solver_params['stab_type']
+
+# EXACT SOLUTION
+
+# Collecting all parameters for coefficient functions
+exact_params = {}
+
+# add parameters of the PDE
+for key, value in pde_params.items():
+    exact_params[key] = value
+# add parameters of the solution
+for key, value in soln_params.items():
+    exact_params[key] = value
+# add parameters of the levelset
+for key, value in lset_params.items():
+    exact_params[key] = value
+
+# Creating Exact object
+exact = Exact(name=name, params=exact_params)
+exact_params['t'] = exact.t
+cfs = math_dict_to_cfs(args_math, exact_params)
+exact.set_cfs(cfs)
+
+df = pd.DataFrame(columns=['h', 'ndof', 'l2u', 'h1u'])
 
 mesh = None
 
-l2us = []
-h1us = []
+l2us, h1us = [], []
 
-sns.set()
+msg = f"&     h    &    dof    &  rate &    l2u    &  rate &    h1u    "
+printbf(msg)
+
+if txt_out:
+    fe = open(f"./output/txt_out/{problem_name}_errs_p{space_order}_{name}.txt", "w")
+    fe.write(f"{msg}\n")
+    fe.close()
 
 for nref in range(max_nref+1):
     exact.set_time(0.0)
-    phi = exact.cfs['phi']
-
     h = 2*bbox_sz*2**(-unif_ref-nref)
-    if bad_rhs:
-        dt = h ** ((lamb + 1) / 2)
-    else:
-        dt = h**((order+1)/2)
+    dt = h**((space_order+1)/time_order)
+    phi = exact.cfs['phi']
 
     if mesh:
         refine_at_levelset(mesh=mesh, levelset=phi, nref=1)
     else:
         mesh = background_mesh(unif_ref=unif_ref, bbox_sz=bbox_sz)
 
-    ndof, ts, l2uss, h1uss = diffusion(mesh=mesh, dt=dt, exact=exact,
-                                       tfinal=tfinal, order=order, out=False, stab_type=stab_type)
-
-    if plt_out:
-        plt.plot(l2uss)
-        plt.title('L^2 vels')
-        plt.show()
-
-        plt.plot(h1uss)
-        plt.title('H^1 vels')
-        plt.show()
+    vtk_out_postfix = f"h={h}" if vtk_out else None
+    ndof, ts, l2uss, h1uss = diffusion(
+        mesh=mesh, exact=exact, dt=dt, tfinal=tfinal, order=space_order, linear_solver_params=linear_solver_params,
+        vtk_out=vtk_out_postfix, logs=solver_logs, printrates=print_sparse_solver_rates, stab_type=stab_type
+    )
 
     l2u = max(l2uss)
     h1u = np.sqrt(sci.simps(y=np.array(h1uss)**2, x=ts, dx=dt, even='avg'))
 
-    print(f"h = {h}, ndof = {ndof}")
-
-    df.loc[nref] = [h, dt, ndof, l2u, h1u]
-    # df.to_csv(f"./csvs/diffusion/{mode}-p{order}-{stab_type}-{fname}.csv")
-
     if len(l2us) > 0:
-        print(f"{ndof:.2E} & {np.log2(l2us[-1]/l2u):.2f} & {l2u:.2E} & {np.log2(h1us[-1]/h1u):.2f} & {h1u:.2E}")
+        msg = f"& $2^{{{int(np.log2(h))}}}$ & {ndof:.3E} & {np.log2(l2us[-1]/l2u):.3f} & {l2u:.3E} & {np.log2(h1us[-1]/h1u):.3f} & {h1u:.3E}"
     else:
-        print(f"  ndof   &      &   lil2u  &      &   l2h1u")
-        print(f"{ndof:.2E} &      & {l2u:.2E} &      & {h1u:.2E}")
+        msg = f"& $2^{{{int(np.log2(h))}}}$ & {ndof:.3E} &       & {l2u:.3E} &       & {h1u:.3E}"
 
     l2us.append(l2u)
     h1us.append(h1u)
+
+    # OUTPUT
+
+    print(msg)
+
+    if txt_out:
+        fe = open(f"./output/txt_out/{problem_name}_errs_p{space_order}_{name}.txt", "a")
+        fe.write(f"{msg}\n")
+        fe.close()
+
+    if csv_out:
+        df.loc[nref] = [h, ndof, l2u, h1u]
+        df.to_csv(f"./output/csv_out/{problem_name}_data_p{space_order}_{name}.csv")

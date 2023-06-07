@@ -7,7 +7,7 @@ class Exact:
     A class for exact solutions for all problems. Its usage is motivated by the fact that it can store
     its own state (time).
     """
-    def __init__(self, params):
+    def __init__(self, name, params):
         """
         Default constructor, which initializes time of the object.
         Args:
@@ -16,6 +16,7 @@ class Exact:
                 Examples: diffusion coefficient nu, kinematic viscosity mu, radius of the surface R.
         """
         self.t = Parameter(0.0)
+        self.name = name
         self.params = params
         self.cfs = None
 

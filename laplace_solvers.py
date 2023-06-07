@@ -176,21 +176,25 @@ def set_ic(mesh, V, gfu_prevs, exact, dt, lsetmeshadap, lset_approx, band, ba_IF
 
 
 # SOLVERS
-def poisson(mesh, exact, order=1, out=False):
+def poisson(mesh, exact, order, linear_solver_params, vtk_out=None, logs=True, printrates=False):
     """
     Solves Poisson equation (with an added mass term to allow non-mean-zero right-hand-sides) on a provided mesh.
     The initial data and the RHS needs to be specified in a dictionary exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
-        mass_cf: float
-            Parameter in front of mass term. Set to 1.0 by default.
         exact: exact.Exact
             Exact solution object, see exact.py and fixed_surface_poisson.py
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
         order: int
             Polynomial order for FEM, default 1.
-        out: bool
-            Flag that indicates if VTK output is to be created.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
+        printrates: bool
+            Flag that indicates if linear solver residuals are to be printed.
 
     Returns:
         V.ndof: int
@@ -202,10 +206,10 @@ def poisson(mesh, exact, order=1, out=False):
     """
     if order < 3:
         precond_name = "bddc"
-        cg_iter = 5
+        cg_iter = linear_solver_params['bddc_cg_iter']
     else:
         precond_name = "local"
-        cg_iter = 100000
+        cg_iter = linear_solver_params['jacobi_cg_iter']
 
     # unpack exact
     param_nu = exact.params['nu']
@@ -214,7 +218,6 @@ def poisson(mesh, exact, order=1, out=False):
     coef_phi = CoefficientFunction(exact.cfs["phi"]).Compile()
     coef_u = CoefficientFunction(exact.cfs["u"]).Compile()
     coef_f = CoefficientFunction(exact.cfs["f"]).Compile()
-
 
     # LEVELSET ADAPTATION
     lsetmeshadap = LevelSetMeshAdaptation(mesh, order=order+1, heapsize=100000000)
@@ -246,50 +249,60 @@ def poisson(mesh, exact, order=1, out=False):
         prea = Preconditioner(a, precond_name)
         assemble_forms([a, f])
 
-    print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    if logs:
+        print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     # LINEAR SOLVER
 
     start = time.perf_counter()
     with TaskManager():
-        solvers.CG(mat=a.mat, pre=prea.mat, rhs=f.vec, sol=gfu.vec, maxsteps=cg_iter, initialize=True, tol=1e-12, printrates=False)
+        solvers.CG(mat=a.mat, pre=prea.mat, rhs=f.vec, sol=gfu.vec, maxsteps=cg_iter, initialize=True, tol=1e-12,
+                   printrates=printrates)
     sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
-    print(f"{bcolors.OKBLUE}System solved    ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    if logs:
+        print(f"{bcolors.OKBLUE}System solved    ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     # ERRORS
 
     with TaskManager():
         l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, coef_u)
 
-    if out:
+    if vtk_out:
         with TaskManager():
             vtk = VTKOutput(ma=mesh,
                             coefs=[lset_approx, deformation, gfu, coef_u],
-                            names=["P1-levelset", "deform", "u", "uSol"],
-                            filename=f"poisson", subdivision=0)
+                            names=["lset_p1", "deform", "u", "coef_u"],
+                            filename=f"./output/vtk_out/fixed_surface_poisson_p{order}_{exact.name}_{vtk_out}", subdivision=0)
             vtk.Do()
 
     return V.ndof, l2u, h1u
 
 
-def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
+def diffusion(mesh, exact, dt, tfinal, order, linear_solver_params, vtk_out=None,
+              logs=True, printrates=False, stab_type='old'):
     """
     Solves diffusion equation on a provided mesh. The initial data and RHS needs to be specified in a dictionary exact.
     VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
-        dt: float
-            Time step size.
         exact: exact.Exact
             Exact solution object, see exact.py and fixed_surface_diffusion_test.py
             If exact.cfs['fel'] is defined, use difference initialization of IC via auxiliary problem.
+        dt: float
+            Time step size.
         tfinal: float
             Final time in the simulation.
         order: int
-            Polynomial order for FEM, default 1.
-        out: bool
-            Flag that indicates if VTK output is to be created.
+            Polynomial order for FEM.
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
+        printrates: bool
+            Flag that indicates if linear solver residuals are to be printed.
         stab_type: str
             Type of stabilization. The standard one is what we call here 'old', i.e. normal gradient in the bulk.
             We also offer two other (more experimental) types of stabilizations:
@@ -311,10 +324,10 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
     """
     if order < 3:
         precond_name = "bddc"
-        cg_iter = 10
+        cg_iter = linear_solver_params['bddc_cg_iter']
     else:
         precond_name = "local"
-        cg_iter = 100000
+        cg_iter = linear_solver_params['jacobi_cg_iter']
 
     # unpack exact
     param_alpha = exact.params['alpha']
@@ -324,7 +337,7 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
     coef_u = CoefficientFunction(exact.cfs["u"]).Compile()
     coef_f = CoefficientFunction(exact.cfs["f"]).Compile()
     coef_fel = None
-    if exact.cfs["fel"]:
+    if 'fel' in exact.cfs:
         coef_fel = CoefficientFunction(exact.cfs["fel"]).Compile()
 
     # LEVELSET ADAPTATION
@@ -361,7 +374,8 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
         prea = Preconditioner(a, precond_name)
         assemble_forms([m, d, a, f])
 
-    print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+    if logs:
+        print(f"{bcolors.OKCYAN}System assembled ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
 
     ### LINEAR SOLVER
 
@@ -386,21 +400,22 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
         with TaskManager():
             prea_el = Preconditioner(a_el, precond_name)
             assemble_forms([a_el, f_el])
-            solvers.CG(mat=a_el.mat, pre=prea_el.mat, rhs=f_el.vec, sol=gfu_el.vec, maxsteps=cg_iter, initialize=True, tol=1e-12,
-                       printrates=False)
+            solvers.CG(mat=a_el.mat, pre=prea_el.mat, rhs=f_el.vec, sol=gfu_el.vec, maxsteps=cg_iter, initialize=True,
+                       tol=1e-12, printrates=printrates)
         sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
         gfu.Set(gfu_el)
-        print(f"{bcolors.OKGREEN}IC computed      ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+        if logs:
+            print(f"{bcolors.OKGREEN}IC computed      ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
     else:
         mesh.SetDeformation(deformation)
         gfu.Set(coef_u)
         mesh.UnsetDeformation()
 
-    if out:
+    if vtk_out:
         vtk = VTKOutput(mesh,
                         coefs=[lset_approx, deformation, gfu, coef_u],
                         names=["P1-levelset", "deform", "u", "uSol"],
-                        filename=f"./vtk_out/diffusion/{exact['name']}",
+                        filename=f"./output/vtk_out/fixed_surface_diffusion_p{order}_{exact.name}_{vtk_out}",
                         subdivision=0)
         vtk.Do(time=0.0)
 
@@ -425,7 +440,7 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
 
         with TaskManager():
             solvers.CG(mat=a.mat, pre=prea.mat, rhs=rhs, sol=diff, initialize=True, maxsteps=cg_iter, tol=1e-12,
-                       printrates=False)
+                       printrates=printrates)
             gfu.vec.data += diff
         sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
 
@@ -438,7 +453,7 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
 
         with TaskManager():
             solvers.CG(mat=a.mat, pre=prea.mat, rhs=rhs, sol=diff, initialize=True, maxsteps=cg_iter, tol=1e-12,
-                           printrates=False)
+                       printrates=printrates)
             gfu.vec.data += diff
         sys.stdout.write("\033[F\033[K")  # to remove annoying deprecation warning
 
@@ -446,45 +461,54 @@ def diffusion(mesh, dt, exact, tfinal=1.0, order=1, out=False, stab_type='old'):
 
         fold.data = f.vec
 
-        print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
+        if logs:
+            print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         with TaskManager():
             l2u, h1u = errors_scal(mesh, ds, Pmat, gfu, coef_u)
         mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
-        if out:
+        if vtk_out:
             with TaskManager():
                 vtk.Do(time=t_curr)
         i += 1
 
-    print("")
-    end = time.perf_counter()
-    print(f" Time elapsed: {end - start: .5f} s")
+    if logs:
+        print("")
+        end = time.perf_counter()
+        print(f" Time elapsed: {end - start: .5f} s")
 
     return V.ndof, out_errs['ts'], out_errs['l2us'], out_errs['h1us']
 
 
-def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=False, stab_type='old'):
+def moving_diffusion(mesh, exact, dt, tfinal, order, time_order, band, linear_solver_params, vtk_out=None,
+                     logs=True, printrates=False, stab_type='old'):
     """
     Solves evolving-surface diffusion equation on a provided mesh. The initial data and RHS needs to be specified in a
     object exact. VTK output can be provided if enabled.
     Args:
         mesh: ngsolve.comp.Mesh.Mesh
             Mesh that contains surface Gamma and is (ideally) refined around it.
-        dt: float
-            Time step size.
-        order: int
-            Polynomial order for FEM, default 1.
-        tfinal: float
-            Final time in the simulation.
         exact: exact.Exact
             Exact solution object, see exact.py and evolving_surface_diffusion.py
-        band: float
-            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        dt: float
+            Time step size.
+        tfinal: float
+            Final time in the simulation.
+        order: int
+            Polynomial order for FEM, default 1.
         time_order: int
             Order of time discretization (BDF in this case).
-        out: bool
-            Flag that indicates if VTK output is to be created.
+        band: float
+            Size of the band around levelset, the distance metric is in terms of the levelset function.
+        linear_solver_params: dict
+            A dictionary with number of iterations for linear solvers.
+        vtk_out: str
+            String to be appended to the name of the VTK file.
+        logs: bool
+            Flag that indicates if logs are to be printed.
+        printrates: bool
+            Flag that indicates if linear solver residuals are to be printed.
         stab_type: str
             Type of stabilization. The standard one is what we call here 'old', i.e. normal gradient in the bulk.
             We also offer two other (more experimental) types of stabilizations:
@@ -504,6 +528,13 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         h1us: List[float]
             List of H^1-error for each t_n.
     """
+    if order < 3:
+        precond_name = "bddc"
+        gmres_iter = linear_solver_params['bddc_gmres_iter']
+    else:
+        precond_name = "local"
+        gmres_iter = linear_solver_params['jacobi_gmres_iter']
+
     bdf_coeffs = [[1, -1],
                   [3 / 2, -2, 1 / 2],
                   [11 / 6, -3, 3 / 2, -1 / 3]]
@@ -511,10 +542,11 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
     bdf_coeff = bdf_coeffs[time_order-1]
 
     # unpack exact
+    param_alpha = exact.params['alpha']
     param_nu = exact.params['nu']
 
     coef_phi = exact.cfs['phi']
-    coef_w = exact.cfs['w']
+    coef_wN = CoefficientFunction((exact.cfs['w1'], exact.cfs['w2'], exact.cfs['w3']))
     coef_u = exact.cfs['u']
     coef_f = exact.cfs['f']
     coef_divGw = exact.cfs['divGw']
@@ -546,16 +578,18 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
 
     gfu_prevs = [GridFunction(V, name=f"gru-{i}") for i in range(time_order)]
 
-    if out:
+    if vtk_out:
         gfu_out = GridFunction(V)
         vtk = VTKOutput(mesh,
                         coefs=[lset_approx, gfu_out, coef_u],
-                        names=["P1-levelset", "u", "uSol"],
-                        filename=f"./vtk_out/diffusion/moving-diff-new",
+                        names=["lset_p1", "u", "coef_u"],
+                        filename=f"./output/vtk_out/evolving_surface_diffusion_p{order}_{exact.name}_{vtk_out}",
                         subdivision=0)
 
     keys = ['ts', 'l2us', 'h1us']
     out_errs = {'ts': [], 'l2us': [], 'h1us': []}
+
+    start = time.perf_counter()
 
     # IC
     set_ic(
@@ -563,17 +597,25 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         band=band, ba_IF=ba_IF, ba_IF_band=ba_IF_band, n=n, Pmat=Pmat, rho_u=rho_u, ds=ds, dX=dX
     )
 
+    if logs:
+        print(f"{bcolors.OKGREEN}IC for BDF{time_order} initialized ({time.perf_counter() - start:.5f} s).{bcolors.ENDC}")
+
     # TIME MARCHING
     dofs = []
 
     exact.set_time(0.0)
     t_curr = 0.0
 
-    if out:
+    if vtk_out:
         gfu_out.Set(gfu_prevs[0])
         vtk.Do(time=t_curr)
 
     i = 1
+
+    start = time.perf_counter()
+
+    time_assembly = 0.0
+    time_solver = 0.0
 
     while t_curr < tfinal + dt/2:
         exact.set_time(t_curr + dt)
@@ -586,37 +628,42 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
             u, v = VG.TnT()
 
         a = BilinearForm(VG)
-        a += bdf_coeff[0] * u * v * ds
-        a += dt * (1. / 2 * InnerProduct(Pmat * coef_w, Pmat * grad(u)) * v -
-                   1. / 2 * InnerProduct(Pmat * coef_w, Pmat * grad(v)) * u +
-                   (coef_divGw - 0.5 * coef_divGwT) * u * v) * ds
+        a += param_alpha * bdf_coeff[0] * u * v * ds
+        a += dt * (param_alpha / 2 * InnerProduct(Pmat * coef_wN, Pmat * grad(u)) * v -
+                   param_alpha / 2 * InnerProduct(Pmat * coef_wN, Pmat * grad(v)) * u +
+                   (coef_divGw - param_alpha / 2 * coef_divGwT) * u * v) * ds
         a += dt * param_nu * InnerProduct(Pmat * grad(u), Pmat * grad(v)) * ds
         if stab_type in ['old', 'total']:
             a += dt * rho_u * (n * grad(u)) * (n * grad(v)) * dX
         if stab_type in ['new', 'total']:
-            a += bdf_coeff[0] * rho_u_new * (n * grad(u)) * (n * grad(v)) * dX
+            a += param_alpha * bdf_coeff[0] * rho_u_new * (n * grad(u)) * (n * grad(v)) * dX
 
         f = LinearForm(VG)
         f += (dt * coef_f - sum([bdf_coeff[j+1] * gfu_prevs[j] for j in range(time_order)])) * v * ds
 
         with TaskManager():
-            c = Preconditioner(a, "bddc")
+            c = Preconditioner(a, precond_name)
+            start_assembly = time.perf_counter()
             a.Assemble()
             f.Assemble()
+            time_assembly += (time.perf_counter() - start_assembly)
 
             gfu = GridFunction(VG)
 
-            solvers.GMRes(A=a.mat, b=f.vec, pre=c.mat, x=gfu.vec, tol=1e-15, maxsteps=15, printrates=False)
+            start_solver = time.perf_counter()
+            solvers.GMRes(A=a.mat, b=f.vec, pre=c.mat, x=gfu.vec, tol=1e-15, maxsteps=gmres_iter, printrates=printrates)
+            time_solver += (time.perf_counter() - start_solver)
 
             for j in range(time_order-1):
                 gfu_prevs[-1-j].vec.data = gfu_prevs[-2-j].vec
             gfu_prevs[0].Set(gfu)
 
-            if out:
+            if vtk_out:
                 gfu_out.Set(gfu)
                 vtk.Do(time=t_curr)
 
-        print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
+        if logs:
+            print("\r", f"Time in the simulation: {t_curr:.5f} s ({int(t_curr / tfinal * 100):3d} %)", end="")
 
         t_curr += dt
 
@@ -625,6 +672,12 @@ def moving_diffusion(mesh, dt, order, tfinal, exact, band, time_order=1, out=Fal
         mass_append(keys=keys, vals=[t_curr, l2u, h1u], **out_errs)
 
         i += 1
-    print("\r", "                                                                             ")
+
+    if logs:
+        print("")
+        end = time.perf_counter()
+        print(f" Time elapsed: {end - start: .5f} s")
+        print(f"{bcolors.OKCYAN}Time in assembly:        {time_assembly:.5f} s.{bcolors.ENDC}")
+        print(f"{bcolors.OKBLUE}Time in solver:          {time_solver:.5f} s.{bcolors.ENDC}")
 
     return np.mean(dofs), out_errs['ts'], out_errs['l2us'], out_errs['h1us']

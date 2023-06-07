@@ -1,0 +1,5 @@
+{
+	"phi":"-R + Sqrt[x^2 + y^2 + z^2]",
+	"u":"(1 + Sin[Pi*t])*Sin[Pi*x]*Sin[Pi*y*z]",
+	"f":"(Pi*(2*nu*x*Cos[Pi*x]*(1 + Sin[Pi*t])*(2*Pi*y*z*Cos[Pi*y*z] + Sin[Pi*y*z]) + Sin[Pi*x]*(6*nu*y*z*Cos[Pi*y*z]*(1 + Sin[Pi*t]) + (alpha*(x^2 + y^2 + z^2)*Cos[Pi*t] + nu*Pi*(y^4 + y^2*(1 + x^2 - 2*z^2) + z^2*(1 + x^2 + z^2))*(1 + Sin[Pi*t]))*Sin[Pi*y*z])))\/(x^2 + y^2 + z^2)"
+}

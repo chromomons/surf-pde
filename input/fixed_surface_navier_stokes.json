@@ -1,14 +1,14 @@
 {
-  "name": "sine_circ",
+  "name": "brandner_circ",
   "num_threads": 16,
-  "path_to_math_json": "./wolfram_mathematica_notebooks/json_output/fixed_surface_poisson_mathematica.json",
+  "path_to_math_json": "./wolfram_mathematica_notebooks/json_output/fixed_surface_navier_stokes_mathematica.json",
   "orders": {
-    "space_order": 3,
+    "space_order": 2,
     "time_order": null
   },
   "pde_params": {
-    "alpha": 1.0,
-    "nu": 1.0
+    "rho": 1.0,
+    "mu": 1.0
   },
   "soln_params": {
     "lamb": 0.5
@@ -21,15 +21,20 @@
     "unif_ref": 2,
     "max_nref": 5
   },
+  "solver_params": {
+    "tfinal": 1.0
+  },
   "out_params": {
     "txt_out": false,
     "vtk_out": false,
     "csv_out": false,
-    "solver_logs": false,
+    "solver_logs": true,
     "print_sparse_solver_rates": false
   },
   "linear_solver_params": {
     "bddc_cg_iter": 10,
-    "jacobi_cg_iter": 100000
+    "jacobi_cg_iter": 100000,
+    "gmres_iter_inner": 2000,
+    "gmres_iter_outer": 100
   }
 }

@@ -1,17 +1,18 @@
 {
-  "name": "l4l2",
+  "name": "olshanskii_circ",
   "num_threads": 16,
-  "path_to_math_json": "./wolfram_mathematica_notebooks/json_output/evolving_surface_diffusion_mathematica.json",
+  "path_to_math_json": "./wolfram_mathematica_notebooks/json_output/evolving_surface_navier_stokes_mathematica.json",
   "orders": {
     "space_order": 2,
     "time_order": 2
   },
   "pde_params": {
-    "alpha": 1.0,
-    "nu": 1.0
+    "rho": 1.0,
+    "mu": 1.0
   },
   "soln_params": {
-    "lamb": 0.5
+    "lamb": 0.5,
+    "is_solenoidal": true
   },
   "lset_params": {
     "R": 1.0,
@@ -23,22 +24,23 @@
   "meshing_params": {
     "bbox_sz": 2.0,
     "unif_ref": 3,
-    "max_nref": 4,
+    "max_nref": 3,
     "band_type": "both"
   },
   "solver_params": {
-    "tfinal": 1.0,
-    "stab_type": "total"
+    "tfinal": 1.0
   },
   "out_params": {
     "txt_out": false,
     "vtk_out": false,
     "csv_out": false,
-    "solver_logs": false,
+    "solver_logs": true,
     "print_sparse_solver_rates": false
   },
   "linear_solver_params": {
-    "bddc_gmres_iter": 20,
-    "jacobi_gmres_iter": 100000
+    "bddc_cg_iter": 10,
+    "jacobi_cg_iter": 100000,
+    "gmres_iter_inner": 2000,
+    "gmres_iter_outer": 100
   }
 }
