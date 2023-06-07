@@ -27,6 +27,7 @@ This project is implemented in `ngsxfem` [7] add-on to `NGSolve` [8] library.
 
 [8] Joachim Schöberl. NGSolve Finite Element Library. Jan. 2009. url: http://sourceforge.net/projects/ngsolve.
 
+ ---
 # Short manual
 
 ### My environment
@@ -59,7 +60,7 @@ Assuming `ngsxfem=2.0.2105` and `ngsolve=6.2.2105` are installed correcly, it sh
 ### Files
 Utility/helper files:
 - `utils.py`: provides utility functions for both solvers and testers.
-- `math2py.py`: converts Wolfram Mathematica symbolic expressions to python expressions.
+- `exact.py`: provides generic class for exact solutions.
 
 Solvers:
 - `laplace_solvers.py`: contains fixed-surface Poisson and diffusion, and evolving-surface diffusion solvers.
@@ -72,8 +73,24 @@ Testers:
 - `fixed_surface_unsteady_stokes_test.py`: tests unsteady Stokes solver.
 - `fixed_surface_navier_stokes_test.py`: tests fixed-surface Navier-Stokes.
 - `evolving_surface_diffusion_test.py`: tests evolving-surface diffusion solver.
-- `evolving_surface_navier_stokes_test.py`: tests evolving-surface Navier-Stokes
+- `evolving_surface_navier_stokes_test.py`: tests evolving-surface Navier-Stokes.
 
-`input/` folder contains JSON input files for the testers.
+Input/Output:
+- `input/` folder contains JSON input files for the testers.
+- `output/` folder contains tester output files:
+  - `output/csv_out/` contains `.csv` files with all error data (useful for error plots).
+  - `output/plt_out/` contains error plot figures.
+  - `output/txt_out/` contains `.txt` files with basic errors tables in LaTeX table style.
+  - `output/vtk_out/` contains VTK (`.vtu` or `.pvd`) files for visualizing solutions.
 
-`wolfram_mathamatica_notebooks/` folder contains Mathematica scripts that compute symbolic right-hand sides, and other exact quantities. 
+Wolfram Mathematica:
+- `wolfram_mathamatica_notebooks/` folder contains Mathematica scripts that compute symbolic right-hand sides and other exact quantities; helpers scripts with surface differential operator, sample geometries, and sample exact solutions.
+- `wolfram_mathamatica_notebooks/json_output/` folder contains JSON files with symbolic expressions for testing.
+
+### How to use this library?
+1. Pick a problem you want to solve.
+2. Generate symbolic data for testing using Wolfram Mathematica scripts. The output of these scripts is in `wolfram_mathematica_notebooks/json_output/` folder.
+3. Configure the JSON input file, make sure that it has correct path to the JSON with Wolfram Mathematica scripts.
+4. Run the appropriate test via `python3 [fixed/evolving]_surface_[poisson/diffusion/steady_stokes/unsteady_stokes/navier_stokes]_test.py [path to JSON input file]`
+
+If you have any questions, don't hesitate to contact me by email: `shakipov@umd.edu`.
